@@ -20,12 +20,15 @@ BEGIN;
 
 -- ── Fixtures ────────────────────────────────────────────────
 --   alice and bob have accounts; carol has an auth row but never claimed a
---   handle, which is how "no profile" is testable.
+--   handle, which is how "no profile" is testable. Dave is a second unclaimed
+--   account, because claiming one is itself a test and carol has to stay
+--   profile-less for the send_dm case below.
 
 INSERT INTO auth.users (id) VALUES
   ('cccc0000-0000-4000-8000-000000000001'),  -- alice
   ('cccc0000-0000-4000-8000-000000000002'),  -- bob
-  ('cccc0000-0000-4000-8000-000000000003');  -- carol (no profile)
+  ('cccc0000-0000-4000-8000-000000000003'),  -- carol (no profile, stays that way)
+  ('cccc0000-0000-4000-8000-000000000004');  -- dave  (claims one below)
 
 INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
   ('cccc0000-0000-4000-8000-000000000001', 'alice_test', 'chat-alice', 'sign-alice'),
@@ -87,9 +90,72 @@ BEGIN
   RAISE NOTICE 'ok  the directory is public to read, own-row to write';
 END $$;
 
+-- Claiming, the way the client actually does it. This is a regression test:
+-- the client used to upsert the table directly and PostgREST put `id` into the
+-- DO UPDATE clause, which the column grant doesn't cover — so every first
+-- claim died with "permission denied for table users", policies never
+-- consulted. The grants are right; the statement was wrong.
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000004","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  -- Dave has an auth row and no profile: the first-claim case.
+  PERFORM claim_handle('dave_test', 'chat-dave', 'sign-dave');
+  IF NOT EXISTS (
+    SELECT 1 FROM users WHERE id = auth.uid() AND handle = 'dave_test'
+  ) THEN
+    RAISE EXCEPTION 'FAIL: claiming a handle did not create the row';
+  END IF;
+
+  -- And again, which is the path a re-login takes.
+  PERFORM claim_handle('dave_two', 'chat-dave-2', 'sign-dave-2');
+  IF NOT EXISTS (
+    SELECT 1 FROM users
+     WHERE id = auth.uid() AND handle = 'dave_two' AND chat_public_key = 'chat-dave-2'
+  ) THEN
+    RAISE EXCEPTION 'FAIL: re-claiming did not refresh the row';
+  END IF;
+
+  BEGIN
+    PERFORM claim_handle('alice_test', 'c', 's');
+    RAISE EXCEPTION 'FAIL: a taken handle was claimed twice';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+
+  BEGIN
+    PERFORM claim_handle('No Spaces', 'c', 's');
+    RAISE EXCEPTION 'FAIL: a malformed handle was accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  RAISE NOTICE 'ok  claiming a handle works on the first try, and stays yours';
+END $$;
+
+-- The cursor write goes through mark_read for the same reason, and the RPC
+-- carries a rule the upsert didn't: cursors only move forward.
+
+DO $$
+DECLARE v BIGINT;
+BEGIN
+  v := mark_read('dm', 'cccc0000-0000-4000-8000-000000000001', 9);
+  IF v <> 9 THEN
+    RAISE EXCEPTION 'FAIL: the cursor did not land on the id asked for';
+  END IF;
+
+  v := mark_read('dm', 'cccc0000-0000-4000-8000-000000000001', 4);
+  IF v <> 9 THEN
+    RAISE EXCEPTION 'FAIL: a late call walked the cursor backwards';
+  END IF;
+  RAISE NOTICE 'ok  marking read creates the cursor and only moves it forward';
+END $$;
+
 -- ============================================================
 -- 3. Conversations
 -- ============================================================
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
 
 DO $$
 BEGIN

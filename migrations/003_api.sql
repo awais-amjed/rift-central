@@ -11,6 +11,36 @@ CREATE OR REPLACE FUNCTION daily_dm_quota() RETURNS INTEGER
   LANGUAGE sql IMMUTABLE AS $$ SELECT 100 $$;
 
 -- ============================================================
+-- Claiming a handle
+-- ============================================================
+-- Creating or refreshing your own directory row. A client cannot do this as a
+-- plain upsert: PostgREST writes every column of the payload into the DO UPDATE
+-- clause, `id` included, and `id` is deliberately not in the UPDATE grant — so
+-- the statement is refused before it ever reaches a policy, whether or not the
+-- row exists. This does the same upsert without touching the key.
+--
+-- SECURITY INVOKER on purpose: the grants and policies in 002 still apply, so
+-- this widens nothing. It only spells the statement in a way the grants allow.
+CREATE OR REPLACE FUNCTION claim_handle(
+  p_handle             TEXT,
+  p_chat_public_key    TEXT,
+  p_signing_public_key TEXT
+) RETURNS VOID
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'not_authenticated';
+  END IF;
+
+  INSERT INTO users (id, handle, chat_public_key, signing_public_key)
+       VALUES (auth.uid(), p_handle, p_chat_public_key, p_signing_public_key)
+  ON CONFLICT (id) DO UPDATE
+          SET handle             = EXCLUDED.handle,
+              chat_public_key    = EXCLUDED.chat_public_key,
+              signing_public_key = EXCLUDED.signing_public_key;
+END; $$;
+
+-- ============================================================
 -- Sending
 -- ============================================================
 -- The one write path for new messages. It exists because a daily counter is
@@ -179,6 +209,7 @@ $$;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM PUBLIC, anon;
 
+GRANT EXECUTE ON FUNCTION claim_handle(TEXT, TEXT, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION send_dm(UUID, TEXT, TEXT, TEXT, INTEGER) TO authenticated;
 GRANT EXECUTE ON FUNCTION dm_quota()          TO authenticated;
 GRANT EXECUTE ON FUNCTION unread_counts()     TO authenticated;
