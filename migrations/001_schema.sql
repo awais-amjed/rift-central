@@ -25,8 +25,6 @@
 -- Client-facing effect: none of these are new concepts, only names that now
 -- agree across the two tiers.
 
-CREATE EXTENSION IF NOT EXISTS pg_cron;
-
 -- Only 'dm' is used here today. The type is shared with the self-hosted schema
 -- so the read-cursor table is literally the same table in both places.
 DO $$ BEGIN

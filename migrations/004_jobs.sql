@@ -9,6 +9,8 @@
 -- This is the difference between the tiers stated as a cron job: a self-hosted
 -- server keeps everything, because it is somebody's own disk.
 
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
 SELECT cron.unschedule('central-dm-retention')
   WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'central-dm-retention');
 
