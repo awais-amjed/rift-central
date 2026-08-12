@@ -47,7 +47,7 @@ SET LOCAL ROLE anon;
 DO $$
 DECLARE t TEXT;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['users','dm_messages','read_state']
+  FOREACH t IN ARRAY ARRAY['users','dm_messages','read_state','public_servers']
   LOOP
     BEGIN
       EXECUTE format('SELECT 1 FROM %I LIMIT 1', t);
@@ -336,6 +336,150 @@ BEGIN
     RAISE EXCEPTION 'FAIL: the conversation carries no envelope to preview';
   END IF;
   RAISE NOTICE 'ok  dm_conversations returns one entry per peer, newest first';
+END $$;
+
+-- ============================================================
+-- 7. The public server directory
+-- ============================================================
+-- A listing is the one thing here that is meant to be read by strangers, so
+-- what these check is the opposite of everywhere else: that it *is* visible,
+-- and that visibility still stops at writing.
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v public_servers;
+BEGIN
+  v := publish_server('https://alpha.supabase.co',
+                      'aaaa0000-0000-4000-8000-000000000001',
+                      'invite-alpha', '  Alpha  ', 'A place', NULL,
+                      ARRAY['gaming','tech'], 12, TRUE);
+  IF v.owner_id <> auth.uid() THEN
+    RAISE EXCEPTION 'FAIL: the listing was not bound to the caller';
+  END IF;
+  IF v.name <> 'Alpha' THEN
+    RAISE EXCEPTION 'FAIL: the name was stored unbtrimmed';
+  END IF;
+
+  -- Re-publishing the same server edits rather than duplicating: it is the
+  -- same server, and the admin has to be able to change the description.
+  v := publish_server('https://alpha.supabase.co',
+                      'aaaa0000-0000-4000-8000-000000000001',
+                      'invite-alpha-2', 'Alpha', 'Edited', NULL,
+                      ARRAY['gaming'], 13, TRUE);
+  IF (SELECT count(*) FROM public_servers) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: re-publishing created a second listing';
+  END IF;
+  IF v.invite_code <> 'invite-alpha-2' OR v.member_count <> 13 THEN
+    RAISE EXCEPTION 'FAIL: re-publishing did not update the row';
+  END IF;
+
+  BEGIN
+    PERFORM publish_server('https://alpha.supabase.co',
+                           'aaaa0000-0000-4000-8000-000000000002',
+                           'c', 'Bad tags', NULL, NULL,
+                           ARRAY['Not A Tag'], 0, TRUE);
+    RAISE EXCEPTION 'FAIL: a malformed tag was accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  -- Delisted, not deleted: still the owner's row, out of everyone's browse.
+  PERFORM publish_server('https://beta.supabase.co',
+                         'aaaa0000-0000-4000-8000-000000000003',
+                         'invite-beta', 'Beta', NULL, NULL, '{}', 3, FALSE);
+  RAISE NOTICE 'ok  publishing creates one listing per (host, server) and edits it after';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public_servers WHERE name = 'Alpha') THEN
+    RAISE EXCEPTION 'FAIL: a listed server is not visible to another account';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public_servers WHERE name = 'Beta') THEN
+    RAISE EXCEPTION 'FAIL: a delisted server is visible to another account';
+  END IF;
+
+  -- No INSERT or UPDATE grant at all: publish_server is the only way in, which
+  -- is what makes the per-account cap and the ownership check unavoidable.
+  BEGIN
+    INSERT INTO public_servers (owner_id, supabase_url, server_id, invite_code, name)
+    VALUES (auth.uid(), 'https://gamma.supabase.co',
+            'aaaa0000-0000-4000-8000-000000000004', 'c', 'Gamma');
+    RAISE EXCEPTION 'FAIL: a listing was inserted without going through publish_server';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  BEGIN
+    UPDATE public_servers SET name = 'Hijacked' WHERE name = 'Alpha';
+    RAISE EXCEPTION 'FAIL: a listing was updated directly';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  -- Deleting is a plain policy-checked write, and the policy is own-row.
+  DELETE FROM public_servers WHERE name = 'Alpha';
+  IF NOT EXISTS (SELECT 1 FROM public_servers WHERE name = 'Alpha') THEN
+    RAISE EXCEPTION 'FAIL: an account withdrew someone else''s listing';
+  END IF;
+
+  -- Central cannot verify that anyone is an admin of a server it has never
+  -- heard of, so the first account to publish a (host, server) owns the
+  -- listing. What it must not do is let the second one take it over.
+  BEGIN
+    PERFORM publish_server('https://alpha.supabase.co',
+                           'aaaa0000-0000-4000-8000-000000000001',
+                           'squatted', 'Alpha', NULL, NULL, '{}', 0, TRUE);
+    RAISE EXCEPTION 'FAIL: a second account repointed an existing listing';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'listing_owned_by_another_account' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a listing is public to read, and only its owner can change it';
+END $$;
+
+DO $$
+DECLARE i INTEGER;
+BEGIN
+  FOR i IN 1..max_public_servers() LOOP
+    PERFORM publish_server('https://n' || i || '.supabase.co',
+                           gen_random_uuid(), 'code', 'S' || i,
+                           NULL, NULL, '{}', 0, TRUE);
+  END LOOP;
+
+  BEGIN
+    PERFORM publish_server('https://over.supabase.co', gen_random_uuid(),
+                           'code', 'One too many', NULL, NULL, '{}', 0, TRUE);
+    RAISE EXCEPTION 'FAIL: an account listed more servers than the cap allows';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'listing_cap_reached' THEN RAISE; END IF;
+  END;
+
+  -- The cap counts listings, not saves: editing one you already hold at the
+  -- cap must still work, or an account at ten servers could never fix a typo.
+  PERFORM publish_server('https://n1.supabase.co',
+                         (SELECT server_id FROM public_servers
+                           WHERE supabase_url = 'https://n1.supabase.co'),
+                         'code', 'S1 renamed', NULL, NULL, '{}', 1, TRUE);
+  RAISE NOTICE 'ok  the per-account cap bounds new listings without freezing old ones';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000003","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  -- Carol has an auth row and never claimed a handle. A listing is owned by an
+  -- account, and an account here is its directory row.
+  BEGIN
+    PERFORM publish_server('https://carol.supabase.co', gen_random_uuid(),
+                           'code', 'Carols', NULL, NULL, '{}', 0, TRUE);
+    RAISE EXCEPTION 'FAIL: an account with no profile published a listing';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'owner_has_no_profile' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  publishing requires an account with a claimed handle';
 END $$;
 
 RESET ROLE;
