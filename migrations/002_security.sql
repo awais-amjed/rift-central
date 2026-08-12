@@ -27,8 +27,6 @@ GRANT UPDATE (handle, chat_public_key, signing_public_key) ON users TO authentic
 GRANT SELECT, DELETE ON dm_messages TO authenticated;
 GRANT UPDATE (ciphertext, nonce, signature, key_version) ON dm_messages TO authenticated;
 
-GRANT SELECT, INSERT, DELETE ON dm_message_reactions TO authenticated;
-
 GRANT SELECT, INSERT ON read_state TO authenticated;
 GRANT UPDATE (last_read_id, updated_at) ON read_state TO authenticated;
 
@@ -38,7 +36,6 @@ GRANT UPDATE (last_read_id, updated_at) ON read_state TO authenticated;
 
 ALTER TABLE users                ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dm_messages          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE dm_message_reactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE read_state           ENABLE ROW LEVEL SECURITY;
 
 -- ---------- users (the directory) ----------
@@ -73,31 +70,6 @@ CREATE POLICY dm_messages_update_own ON dm_messages FOR UPDATE TO authenticated
 DROP POLICY IF EXISTS dm_messages_delete_own ON dm_messages;
 CREATE POLICY dm_messages_delete_own ON dm_messages FOR DELETE TO authenticated
   USING (sender_id = auth.uid());
-
--- ---------- reactions ----------
-
-DROP POLICY IF EXISTS dm_reactions_select ON dm_message_reactions;
-CREATE POLICY dm_reactions_select ON dm_message_reactions FOR SELECT TO authenticated
-  USING (EXISTS (
-    SELECT 1 FROM dm_messages m
-     WHERE m.id = dm_message_reactions.message_id
-       AND auth.uid() IN (m.sender_id, m.recipient_id)
-  ));
-
-DROP POLICY IF EXISTS dm_reactions_insert ON dm_message_reactions;
-CREATE POLICY dm_reactions_insert ON dm_message_reactions FOR INSERT TO authenticated
-  WITH CHECK (
-    user_id = auth.uid()
-    AND EXISTS (
-      SELECT 1 FROM dm_messages m
-       WHERE m.id = dm_message_reactions.message_id
-         AND auth.uid() IN (m.sender_id, m.recipient_id)
-    )
-  );
-
-DROP POLICY IF EXISTS dm_reactions_delete_own ON dm_message_reactions;
-CREATE POLICY dm_reactions_delete_own ON dm_message_reactions FOR DELETE TO authenticated
-  USING (user_id = auth.uid());
 
 -- ---------- read_state ----------
 -- Own-row only, which is also what keeps it from becoming a read receipt: a

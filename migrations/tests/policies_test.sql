@@ -47,7 +47,7 @@ SET LOCAL ROLE anon;
 DO $$
 DECLARE t TEXT;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['users','dm_messages','dm_message_reactions','read_state']
+  FOREACH t IN ARRAY ARRAY['users','dm_messages','read_state']
   LOOP
     BEGIN
       EXECUTE format('SELECT 1 FROM %I LIMIT 1', t);
@@ -275,35 +275,6 @@ BEGIN
     RAISE EXCEPTION 'FAIL: the recipient deleted the sender''s message';
   END IF;
   RAISE NOTICE 'ok  only the sender can delete a message';
-END $$;
-
--- ============================================================
--- 4. Reactions
--- ============================================================
-
-DO $$
-BEGIN
-  INSERT INTO dm_message_reactions (message_id, user_id, emoji)
-  VALUES (7001, auth.uid(), '👍');
-
-  BEGIN
-    INSERT INTO dm_message_reactions (message_id, user_id, emoji)
-    VALUES (7001, 'cccc0000-0000-4000-8000-000000000002', '👎');
-    RAISE EXCEPTION 'FAIL: an account reacted as somebody else';
-  EXCEPTION WHEN insufficient_privilege THEN NULL;
-  END;
-  RAISE NOTICE 'ok  you may only react as yourself';
-END $$;
-
-DO $$ BEGIN PERFORM set_config('request.jwt.claims',
-  '{"sub":"cccc0000-0000-4000-8000-000000000003","role":"authenticated"}', true); END $$;
-
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM dm_message_reactions) THEN
-    RAISE EXCEPTION 'FAIL: reactions on a private conversation are visible to outsiders';
-  END IF;
-  RAISE NOTICE 'ok  reactions inherit the conversation''s visibility';
 END $$;
 
 -- ============================================================

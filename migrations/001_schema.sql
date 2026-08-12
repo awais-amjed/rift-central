@@ -17,8 +17,6 @@
 --                                         hold more than a directory profile
 --   user_id         -> id                 matches the self-hosted `users.id`,
 --                                         and it is the GoTrue uid either way
---   dm_reactions    -> dm_message_reactions   same name as the self-hosted
---                                         table holding the same thing
 --   dm_read_state   -> read_state         same shape as self-hosted, so one
 --                                         client path badges both tiers
 --
@@ -107,23 +105,6 @@ END; $$;
 DROP TRIGGER IF EXISTS attest_dm_messages ON dm_messages;
 CREATE TRIGGER attest_dm_messages BEFORE INSERT OR UPDATE ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION attest_dm();
-
--- ============================================================
--- Reactions
--- ============================================================
--- Not E2E, same accepted trade-off as the self-hosted tier: the server sees who
--- reacted with which emoji, never what the message said.
-
-CREATE TABLE IF NOT EXISTS dm_message_reactions (
-  message_id BIGINT      NOT NULL REFERENCES dm_messages(id) ON DELETE CASCADE,
-  user_id    UUID        NOT NULL REFERENCES users(id)       ON DELETE CASCADE,
-  emoji      TEXT        NOT NULL CHECK (char_length(emoji) BETWEEN 1 AND 32),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (message_id, user_id, emoji)
-);
-
-CREATE INDEX IF NOT EXISTS idx_dm_message_reactions_message
-  ON dm_message_reactions (message_id);
 
 -- ============================================================
 -- Read state
