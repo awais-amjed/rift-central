@@ -18,10 +18,11 @@ If that address named a particular vendor, moving hosts would cost every
 operator a re-enable — and the ones who didn't notice would silently stop
 waking anyone. Behind a name we own, the relay can move as often as it likes.
 
-Currently `https://push.joinrift.app`. **It has to resolve before push is
-enabled anywhere.** The client checks the relay answers `GET` with `200` before
-writing the address into a server, so a missing record is a sentence on screen
-rather than months of undelivered pings.
+Currently `https://push.joinrift.app`, live since 24 Aug 2026: a Cloudflare
+custom domain bound to `rift-push-relay`, forwarding to the Supabase edge
+function. The client checks the relay answers `GET` with `200` before writing
+the address into a server, so a record that has been moved or not yet made is a
+sentence on screen rather than months of undelivered pings.
 
 ## The code
 
@@ -54,6 +55,13 @@ node relay/server.mjs
 
 Add `"type": "module"` to the deployment's `package.json` to silence Node's
 module-detection warning.
+
+### Moving the relay
+
+Edit `RELAY_BACKEND` in `relay/wrangler.toml` and `wrangler deploy`. That is
+the whole procedure — no operator is involved, and no `push_config` row
+changes. Removing the variable entirely makes the Worker *be* the relay rather
+than forward to one; read the ceiling below before doing that.
 
 ### Giving the name a meaning
 

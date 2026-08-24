@@ -1,0 +1,19 @@
+# The forwarder that gives `push.joinrift.app` a meaning.
+#
+# `RELAY_BACKEND` is what the name currently points at. Moving the relay —
+# to a VPS, to Fly.io, or into this Worker itself by removing the variable —
+# is editing this line and redeploying. No self-hosted server ever learns
+# that it happened, which is the whole point of addressing the relay by a
+# name we own.
+name = "rift-push-relay"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+[vars]
+RELAY_BACKEND = "https://fjkrobvftxqqapvhgtuw.supabase.co/functions/v1/push_send"
+
+# The stable address. `custom_domain` makes Cloudflare create and manage the
+# DNS record, so the name is bound to this Worker rather than to an IP.
+[[routes]]
+pattern = "push.joinrift.app"
+custom_domain = true
