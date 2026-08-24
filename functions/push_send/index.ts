@@ -10,6 +10,13 @@ import { createClient } from "@supabase/supabase-js";
  * which leaves them unable to reach their own members' phones — so they ask
  * here instead, and this forwards.
  *
+ * Two callers, two credentials. Central's own `dm_messages` trigger presents
+ * the deployment secret and names a *recipient*, whose devices are looked up
+ * here. A self-hosted server presents a relay credential its admin enrolled
+ * (migration 010) and supplies the *tokens* it already holds for its own
+ * member — central has no idea who that is, and keeps it that way by not
+ * asking.
+ *
  * What it learns is the point of the design: a device token and a moment. Not
  * who sent the message, not what it said, not which server or channel it was
  * in. The payload is empty — a doorbell, sent as `data` rather than
@@ -112,18 +119,33 @@ async function ring(token: string, bearer: string): Promise<boolean> {
     body.includes("INVALID_ARGUMENT"));
 }
 
+/** How many devices one request may ring. A community server, not a fleet. */
+const MAX_TOKENS = 1000;
+
 Deno.serve(async (req) => {
   try {
-    if (req.headers.get("x-push-secret") !== PUSH_SECRET) {
-      return new Response("forbidden", { status: 403 });
-    }
+    const secret = req.headers.get("x-push-secret") ?? "";
+    const { recipient, relay_id: relayId, tokens: given } = await req.json();
 
-    const { recipient, tokens: given } = await req.json();
+    let tokens: string[] = Array.isArray(given) ? given.filter((t) => typeof t === "string") : [];
 
-    // Either a user on this deployment, or — for a self-hosted server relaying
-    // through here — the tokens it already holds for its own member.
-    let tokens: string[] = Array.isArray(given) ? given : [];
-    if (recipient) {
+    if (relayId) {
+      // A self-hosted server forwarding for one of its own members. Verifying
+      // and metering the credential is one statement, so two requests that
+      // each see room under the day's ceiling cannot both be let through.
+      if (tokens.length === 0) return Response.json({ rang: 0 });
+      if (tokens.length > MAX_TOKENS) tokens = tokens.slice(0, MAX_TOKENS);
+      const { data: allowed, error } = await supabase.rpc("claim_relay_push", {
+        p_relay_id: relayId,
+        p_secret: secret,
+        p_count: tokens.length,
+      });
+      if (error) return new Response(`db: ${error.message}`, { status: 500 });
+      if (allowed !== true) return new Response("forbidden", { status: 403 });
+    } else {
+      // Central's own trigger, which names an account rather than a device.
+      if (secret !== PUSH_SECRET) return new Response("forbidden", { status: 403 });
+      if (!recipient) return Response.json({ rang: 0 });
       const { data, error } = await supabase
         .from("device_tokens")
         .select("token")
@@ -131,13 +153,18 @@ Deno.serve(async (req) => {
       if (error) return new Response(`db: ${error.message}`, { status: 500 });
       tokens = (data ?? []).map((r: Record<string, string>) => r.token);
     }
+
     if (tokens.length === 0) return Response.json({ rang: 0 });
 
     const bearer = await googleAccessToken();
     const results = await Promise.all(tokens.map((t) => ring(t, bearer)));
 
     const dead = tokens.filter((_, i) => !results[i]);
-    if (dead.length > 0) {
+    // Only central's own registry is ours to clean. A relayed token lives in a
+    // database we have no credentials for, and the dead ones there are swept
+    // on staleness instead (self-hosted migration 010) — reporting them back
+    // would tell us which of a server's members had uninstalled the app.
+    if (dead.length > 0 && !relayId) {
       await supabase.from("device_tokens").delete().in("token", dead);
     }
     return Response.json({ rang: tokens.length - dead.length, pruned: dead.length });
