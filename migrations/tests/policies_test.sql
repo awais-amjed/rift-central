@@ -38,6 +38,16 @@ INSERT INTO dm_messages (id, sender_id, recipient_id, ciphertext, nonce, signatu
 VALUES (7001, 'cccc0000-0000-4000-8000-000000000002',
               'cccc0000-0000-4000-8000-000000000001', 'from-bob', 'n', 's', 1);
 
+-- Alice and bob are friends, and since 012 that is a *precondition* for the
+-- message above rather than a consequence of it: `send_dm` refuses anything
+-- between accounts that are not friends, so a fixture with a conversation in
+-- it and no friendship behind it is a state the server would never produce.
+-- Bob asked, which is consistent with bob having sent the first message.
+INSERT INTO friendships (low_id, high_id, requester_id, status) VALUES
+  ('cccc0000-0000-4000-8000-000000000001',
+   'cccc0000-0000-4000-8000-000000000002',
+   'cccc0000-0000-4000-8000-000000000002', 'accepted');
+
 -- ============================================================
 -- 1. The unauthenticated role
 -- ============================================================
@@ -63,8 +73,15 @@ RESET ROLE;
 -- ============================================================
 -- 2. The directory
 -- ============================================================
--- Deliberately readable by every signed-in account: you cannot message someone
--- you cannot find. What must not be writable is someone else's row.
+-- It stopped being a directory in 012. `users` used to be readable row-by-row
+-- by every signed-in account — "you cannot message someone you cannot find" —
+-- and that turned out to mean the whole membership was enumerable by anyone
+-- who had signed up. Now you may read your own row and the rows of people you
+-- have a standing relationship with; a handle becomes a person only through
+-- `friend_request_by_handle`, which asks in the same statement it resolves.
+--
+-- The stranger half of that is asserted below, once dave has a handle to be a
+-- stranger with. What must still not be writable is someone else's row.
 
 SET LOCAL ROLE authenticated;
 DO $$ BEGIN PERFORM set_config('request.jwt.claims',
@@ -72,8 +89,13 @@ DO $$ BEGIN PERFORM set_config('request.jwt.claims',
 
 DO $$
 BEGIN
+  -- Bob: a friend, with a conversation. Both halves of `knows_user` are true
+  -- for him, and either alone has to be enough — see section 8.
   IF NOT EXISTS (SELECT 1 FROM users WHERE handle = 'bob_test') THEN
-    RAISE EXCEPTION 'FAIL: the directory is not readable by a signed-in account';
+    RAISE EXCEPTION 'FAIL: a friend''s directory row is not readable';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = auth.uid()) THEN
+    RAISE EXCEPTION 'FAIL: an account cannot read its own directory row';
   END IF;
 
   UPDATE users SET handle = 'stolen' WHERE id = 'cccc0000-0000-4000-8000-000000000002';
@@ -87,7 +109,7 @@ BEGIN
     RAISE EXCEPTION 'FAIL: an account created a profile for someone else';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
-  RAISE NOTICE 'ok  the directory is public to read, own-row to write';
+  RAISE NOTICE 'ok  the directory is relationship-scoped to read, own-row to write';
 END $$;
 
 -- Claiming, the way the client actually does it. This is a regression test:
@@ -130,6 +152,32 @@ BEGIN
   EXCEPTION WHEN check_violation THEN NULL;
   END;
   RAISE NOTICE 'ok  claiming a handle works on the first try, and stays yours';
+END $$;
+
+-- Dave now has a handle and no relationship with anybody. He is the stranger
+-- case, and this is the assertion that ends handle search: alice cannot see
+-- his row, cannot find it by handle, and cannot find it by walking the table.
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v_rows INT;
+BEGIN
+  IF EXISTS (SELECT 1 FROM users WHERE handle = 'dave_two') THEN
+    RAISE EXCEPTION 'FAIL: a stranger''s handle is still findable';
+  END IF;
+  IF EXISTS (SELECT 1 FROM users WHERE handle LIKE 'dav%') THEN
+    RAISE EXCEPTION 'FAIL: a stranger is still reachable by prefix search';
+  END IF;
+
+  -- The whole table, which is what a client with a REST key would ask for.
+  -- Alice knows exactly two rows: her own, and bob's.
+  SELECT count(*) INTO v_rows FROM users;
+  IF v_rows <> 2 THEN
+    RAISE EXCEPTION 'FAIL: the directory returned % rows, not just the two alice knows', v_rows;
+  END IF;
+  RAISE NOTICE 'ok  a stranger cannot be found, by handle or by listing';
 END $$;
 
 -- The cursor write goes through mark_read for the same reason, and the RPC
@@ -480,6 +528,392 @@ BEGIN
     IF SQLERRM <> 'owner_has_no_profile' THEN RAISE; END IF;
   END;
   RAISE NOTICE 'ok  publishing requires an account with a claimed handle';
+END $$;
+
+
+-- ============================================================
+-- 8. Friends, requests and blocks
+-- ============================================================
+-- The gate added in 012. Its one sentence is "you cannot send anything to
+-- somebody who is not your friend", and most of what follows is that sentence
+-- checked from the angles a client could otherwise get wrong: the side that
+-- asked cannot answer, a withdrawn request buys nothing, a block is silent
+-- from the side it lands on, and none of it is reachable by writing to a table
+-- directly.
+--
+-- Alice and bob arrive here as friends (see the fixtures). Dave arrives as a
+-- stranger with a handle, which is what makes him useful.
+
+-- ---------- a stranger is unreachable, in both senses ----------
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  IF friendship_state('cccc0000-0000-4000-8000-000000000004') <> 'none' THEN
+    RAISE EXCEPTION 'FAIL: alice and dave are not strangers to begin with';
+  END IF;
+
+  BEGIN
+    PERFORM send_dm('cccc0000-0000-4000-8000-000000000004', 'hi', 'n', 's', 1);
+    RAISE EXCEPTION 'FAIL: a stranger was messaged';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_friends' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a stranger cannot be sent anything at all';
+END $$;
+
+-- ---------- a handle becomes a person, and only this way ----------
+-- The lookup and the request are one statement on purpose: an RPC that merely
+-- resolved a handle to an id would be the enumeration this migration removes,
+-- minus the typing. Every successful resolution costs the caller a visible row
+-- in somebody's Pending list.
+
+DO $$
+DECLARE v JSONB;
+BEGIN
+  -- Case, and surrounding whitespace, are the user's typing rather than their
+  -- intent. Handles are lowercase by the column's own CHECK.
+  v := friend_request_by_handle('  DAVE_TWO  ');
+  IF (v->>'state') <> 'outgoing' THEN
+    RAISE EXCEPTION 'FAIL: asking a stranger did not create an outgoing request, got %', v;
+  END IF;
+  IF (v->>'handle') <> 'dave_two' THEN
+    RAISE EXCEPTION 'FAIL: the request did not answer with the handle it resolved';
+  END IF;
+
+  -- Asking twice is the same request, not two.
+  IF (friend_request_by_handle('dave_two')->>'state') <> 'outgoing' THEN
+    RAISE EXCEPTION 'FAIL: re-asking changed the state';
+  END IF;
+  IF (SELECT count(*) FROM friendships
+       WHERE low_id  = LEAST(auth.uid(), 'cccc0000-0000-4000-8000-000000000004'::UUID)
+         AND high_id = GREATEST(auth.uid(), 'cccc0000-0000-4000-8000-000000000004'::UUID)) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: asking twice made two rows';
+  END IF;
+
+  BEGIN
+    PERFORM friend_request_by_handle('nobody_at_all');
+    RAISE EXCEPTION 'FAIL: a handle nobody owns was accepted';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'no_such_user' THEN RAISE; END IF;
+  END;
+
+  -- Not a handle at all. Refused on shape, without touching the table.
+  BEGIN
+    PERFORM friend_request_by_handle('Not A Handle!');
+    RAISE EXCEPTION 'FAIL: a malformed handle reached the directory';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'no_such_user' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM friend_request_by_handle('alice_test');
+    RAISE EXCEPTION 'FAIL: an account befriended itself';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'cannot_friend_self' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a full handle sends a request; anything else sends nothing';
+END $$;
+
+-- ---------- a pending request carries nothing ----------
+-- This is the hole the first version of 012 left: the request *was* a message,
+-- so withdrawing and asking again bought another one, over and over. Now the
+-- allowance is zero on both sides of the withdraw.
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM send_dm('cccc0000-0000-4000-8000-000000000004', 'while you decide', 'n', 's', 1);
+    RAISE EXCEPTION 'FAIL: a pending request let a message through';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_friends' THEN RAISE; END IF;
+  END;
+
+  PERFORM unfriend('cccc0000-0000-4000-8000-000000000004');   -- withdraw
+  PERFORM friend_request_by_handle('dave_two');               -- and ask again
+
+  BEGIN
+    PERFORM send_dm('cccc0000-0000-4000-8000-000000000004', 'second go', 'n', 's', 1);
+    RAISE EXCEPTION 'FAIL: withdraw-and-resend bought a message';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_friends' THEN RAISE; END IF;
+  END;
+
+  IF EXISTS (SELECT 1 FROM dm_messages
+              WHERE recipient_id = 'cccc0000-0000-4000-8000-000000000004') THEN
+    RAISE EXCEPTION 'FAIL: dave received something before accepting anything';
+  END IF;
+  RAISE NOTICE 'ok  withdrawing and re-asking delivers nothing, however often';
+END $$;
+
+-- ---------- the requester cannot answer their own request ----------
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM respond_friend_request('cccc0000-0000-4000-8000-000000000004', TRUE);
+    RAISE EXCEPTION 'FAIL: the requester accepted their own request';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_your_request' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a request is answered by the side that did not send it';
+END $$;
+
+-- ---------- but the pending peer can be seen, and only the pending peer ----------
+-- A request has to put a handle in front of the person deciding, or Pending is
+-- a list of UUIDs. That is `knows_user`'s friendship half, and it is why the
+-- directory predicate is "any relationship" rather than "accepted".
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000004","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v JSONB;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE handle = 'alice_test') THEN
+    RAISE EXCEPTION 'FAIL: dave cannot see who is asking to be his friend';
+  END IF;
+  IF EXISTS (SELECT 1 FROM users WHERE handle = 'bob_test') THEN
+    RAISE EXCEPTION 'FAIL: one request made the rest of the directory visible';
+  END IF;
+
+  v := friend_list();
+  IF jsonb_array_length(v->'incoming') <> 1 THEN
+    RAISE EXCEPTION 'FAIL: the request is not in dave''s incoming list';
+  END IF;
+  IF (v->'incoming'->0->>'handle') <> 'alice_test' THEN
+    RAISE EXCEPTION 'FAIL: the incoming request has no handle on it';
+  END IF;
+  IF jsonb_array_length(v->'outgoing') <> 0 THEN
+    RAISE EXCEPTION 'FAIL: a received request was counted as sent';
+  END IF;
+  RAISE NOTICE 'ok  a request shows the asker''s handle, and nobody else''s';
+END $$;
+
+-- ---------- declining removes the request and only the request ----------
+
+DO $$
+BEGIN
+  IF respond_friend_request('cccc0000-0000-4000-8000-000000000001', FALSE) <> 'none' THEN
+    RAISE EXCEPTION 'FAIL: declining did not end in none';
+  END IF;
+  IF friendship_state('cccc0000-0000-4000-8000-000000000001') <> 'none' THEN
+    RAISE EXCEPTION 'FAIL: the declined request is still standing';
+  END IF;
+  IF EXISTS (SELECT 1 FROM users WHERE handle = 'alice_test') THEN
+    RAISE EXCEPTION 'FAIL: a declined asker is still visible in the directory';
+  END IF;
+  RAISE NOTICE 'ok  declining clears the row, and the asker goes back to being a stranger';
+END $$;
+
+-- ---------- accepting is the only thing that opens the composer ----------
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v JSONB;
+BEGIN
+  PERFORM friend_request_by_handle('dave_two');
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000000004","role":"authenticated"}', true);
+  IF respond_friend_request('cccc0000-0000-4000-8000-000000000001', TRUE) <> 'friends' THEN
+    RAISE EXCEPTION 'FAIL: accepting did not end in friends';
+  END IF;
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+  v := send_dm('cccc0000-0000-4000-8000-000000000004', 'now we can talk', 'n', 's', 1);
+  IF (v->>'state') <> 'friends' THEN
+    RAISE EXCEPTION 'FAIL: a send between friends did not report friends';
+  END IF;
+  RAISE NOTICE 'ok  accepting, and nothing else, opens the composer';
+END $$;
+
+-- ---------- crossing requests collapse into a friendship ----------
+-- Two people who ask each other at the same time have already agreed. A pair
+-- with a request pending in both directions would be a state with no button
+-- for it.
+
+DO $$
+BEGIN
+  PERFORM unfriend('cccc0000-0000-4000-8000-000000000004');
+  PERFORM friend_request_by_handle('dave_two');
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000000004","role":"authenticated"}', true);
+  IF friend_request('cccc0000-0000-4000-8000-000000000001') <> 'friends' THEN
+    RAISE EXCEPTION 'FAIL: asking back did not accept';
+  END IF;
+  RAISE NOTICE 'ok  asking somebody who has already asked you accepts instead';
+END $$;
+
+-- ---------- unfriending ends the relationship, not the history ----------
+
+DO $$
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+  PERFORM unfriend('cccc0000-0000-4000-8000-000000000004');
+
+  IF NOT EXISTS (SELECT 1 FROM dm_messages WHERE ciphertext = 'now we can talk') THEN
+    RAISE EXCEPTION 'FAIL: unfriending deleted the conversation';
+  END IF;
+  -- Still readable, because the key that opens it is derived from a row this
+  -- account must keep being able to fetch. A conversation is not something one
+  -- of two people gets to erase from the other.
+  IF NOT EXISTS (SELECT 1 FROM users WHERE handle = 'dave_two') THEN
+    RAISE EXCEPTION 'FAIL: unfriending made the peer''s keys unreadable';
+  END IF;
+  BEGIN
+    PERFORM send_dm('cccc0000-0000-4000-8000-000000000004', 'one more', 'n', 's', 1);
+    RAISE EXCEPTION 'FAIL: an ex-friend could still be messaged';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_friends' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  unfriending closes the composer and keeps the history';
+END $$;
+
+-- ---------- blocking ----------
+-- Three things at once: the relationship ends, the handle stops resolving, and
+-- the person blocked is never told. The third is the one worth being careful
+-- about — being told is an invitation to make a second account.
+
+DO $$
+DECLARE v JSONB;
+BEGIN
+  IF block_user('cccc0000-0000-4000-8000-000000000002') <> 'blocked' THEN
+    RAISE EXCEPTION 'FAIL: block_user did not report blocked';
+  END IF;
+  IF EXISTS (SELECT 1 FROM friendships
+              WHERE low_id  = LEAST(auth.uid(), 'cccc0000-0000-4000-8000-000000000002'::UUID)
+                AND high_id = GREATEST(auth.uid(), 'cccc0000-0000-4000-8000-000000000002'::UUID)) THEN
+    RAISE EXCEPTION 'FAIL: a block left the friendship standing';
+  END IF;
+
+  BEGIN
+    PERFORM friend_request_by_handle('bob_test');
+    RAISE EXCEPTION 'FAIL: an account re-added somebody it had blocked without unblocking';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'blocked' THEN RAISE; END IF;
+  END;
+
+  -- The blocked account is still listed *by handle*, or it could not be
+  -- unblocked. `friend_list` is SECURITY DEFINER for exactly this row.
+  v := friend_list();
+  IF jsonb_array_length(v->'blocked') <> 1
+     OR (v->'blocked'->0->>'handle') <> 'bob_test' THEN
+    RAISE EXCEPTION 'FAIL: the block list cannot name who is on it';
+  END IF;
+  RAISE NOTICE 'ok  blocking ends the friendship and stays undoable';
+END $$;
+
+DO $$
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true);
+
+  -- Bob is not told, and cannot find out.
+  IF EXISTS (SELECT 1 FROM blocks) THEN
+    RAISE EXCEPTION 'FAIL: the blocked account can read the block';
+  END IF;
+  IF friendship_state('cccc0000-0000-4000-8000-000000000001') <> 'none' THEN
+    RAISE EXCEPTION 'FAIL: being blocked is distinguishable from being unfriended';
+  END IF;
+
+  -- Their old conversation still opens: blocking takes away reach, not the
+  -- ability to read what was already said. The peer's row stays fetchable
+  -- because the DM key is derived from the key published in it.
+  IF NOT EXISTS (SELECT 1 FROM dm_messages WHERE ciphertext = 'from-bob') THEN
+    RAISE EXCEPTION 'FAIL: a block deleted the conversation';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM users WHERE handle = 'alice_test') THEN
+    RAISE EXCEPTION 'FAIL: a block made the blocker''s published keys unreadable';
+  END IF;
+
+  -- But the handle no longer resolves to anybody, which is what "cannot find
+  -- you" has to mean — and it is refused with the sentence a handle nobody
+  -- owns gets, not with one that says a block happened.
+  BEGIN
+    PERFORM friend_request_by_handle('alice_test');
+    RAISE EXCEPTION 'FAIL: a blocked account could still send a request';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM = 'blocked' THEN
+      RAISE EXCEPTION 'FAIL: the refusal told the blocked account it was blocked';
+    END IF;
+    IF SQLERRM <> 'no_such_user' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM send_dm('cccc0000-0000-4000-8000-000000000001', 'hello?', 'n', 's', 1);
+    RAISE EXCEPTION 'FAIL: a blocked account could still send a message';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_friends' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a block is silent, and reads as a handle that never existed';
+END $$;
+
+-- ---------- unblocking restores reachability and nothing else ----------
+
+DO $$
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+  PERFORM unblock_user('cccc0000-0000-4000-8000-000000000002');
+
+  IF friendship_state('cccc0000-0000-4000-8000-000000000002') <> 'none' THEN
+    RAISE EXCEPTION 'FAIL: unblocking restored the friendship';
+  END IF;
+  BEGIN
+    PERFORM send_dm('cccc0000-0000-4000-8000-000000000002', 'back?', 'n', 's', 1);
+    RAISE EXCEPTION 'FAIL: unblocking reopened the composer';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_friends' THEN RAISE; END IF;
+  END;
+  IF (friend_request_by_handle('bob_test')->>'state') <> 'outgoing' THEN
+    RAISE EXCEPTION 'FAIL: unblocking did not restore reachability';
+  END IF;
+  RAISE NOTICE 'ok  unblocking makes two strangers, which is where they started';
+END $$;
+
+-- ---------- none of it is reachable by writing to the tables ----------
+-- There is no INSERT, UPDATE or DELETE grant on either table, because every
+-- change here carries a rule with it and a rule that lives in a policy has to
+-- be re-derived by every policy that reads the table afterwards.
+
+DO $$
+BEGIN
+  BEGIN
+    UPDATE friendships SET status = 'accepted'
+     WHERE auth.uid() IN (low_id, high_id);
+    RAISE EXCEPTION 'FAIL: an account accepted a friendship by writing to the table';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  BEGIN
+    INSERT INTO friendships (low_id, high_id, requester_id, status)
+    VALUES (LEAST(auth.uid(), 'cccc0000-0000-4000-8000-000000000004'::UUID),
+            GREATEST(auth.uid(), 'cccc0000-0000-4000-8000-000000000004'::UUID),
+            auth.uid(), 'accepted');
+    RAISE EXCEPTION 'FAIL: an account made itself somebody''s friend';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  BEGIN
+    INSERT INTO blocks (blocker_id, blocked_id)
+    VALUES ('cccc0000-0000-4000-8000-000000000002', auth.uid());
+    RAISE EXCEPTION 'FAIL: an account wrote someone else''s block list';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  BEGIN
+    PERFORM _friend_bucket('cccc0000-0000-4000-8000-000000000002', 'accepted', NULL);
+    RAISE EXCEPTION 'FAIL: an account read someone else''s friend list';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  every relationship change goes through an RPC';
 END $$;
 
 RESET ROLE;
