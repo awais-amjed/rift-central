@@ -371,19 +371,89 @@ END $$;
 -- ============================================================
 
 DO $$
-DECLARE v JSONB;
+DECLARE
+  v    JSONB;
+  rows JSONB;
 BEGIN
   v := dm_conversations();
-  IF jsonb_array_length(v) <> 1 THEN
-    RAISE EXCEPTION 'FAIL: expected one conversation, got %', jsonb_array_length(v);
+  rows := v->'conversations';
+  IF jsonb_array_length(rows) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: expected one conversation, got %',
+      jsonb_array_length(rows);
   END IF;
-  IF (v->0->>'peer_name') <> 'bob_test' THEN
+  IF (rows->0->>'handle') <> 'bob_test' THEN
     RAISE EXCEPTION 'FAIL: the conversation is not resolved against the directory';
   END IF;
-  IF (v->0->'last_message'->>'ciphertext') IS NULL THEN
+  IF (rows->0->'last_message'->>'ciphertext') IS NULL THEN
     RAISE EXCEPTION 'FAIL: the conversation carries no envelope to preview';
   END IF;
+  IF (v->>'has_more')::BOOLEAN THEN
+    RAISE EXCEPTION 'FAIL: one conversation was reported as a partial page';
+  END IF;
   RAISE NOTICE 'ok  dm_conversations returns one entry per peer, newest first';
+END $$;
+
+-- The row carries everything it draws, which is the point of 013: the badge,
+-- the cursor a read writes back, and how much this person may interrupt. Each
+-- of those used to be a separate unbounded read of a table with one row per
+-- conversation, scanned on the client.
+--
+-- Section 5 left alice caught up, so a fresh message from bob is what gives
+-- this something to count.
+--
+-- Inserted with bob's claim in force, because `dm_messages_stamp_sender`
+-- overwrites `sender_id` with `auth.uid()` whatever the row says — which is
+-- the point of that trigger and worth not fighting.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+RESET ROLE;
+INSERT INTO dm_messages (id, sender_id, recipient_id, ciphertext, nonce,
+                         signature, key_version)
+VALUES (7100, 'cccc0000-0000-4000-8000-000000000002',
+        'cccc0000-0000-4000-8000-000000000001',
+        'newer', 'n', 's', 1);
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v_row JSONB;
+BEGIN
+  v_row := dm_conversations()->'conversations'->0;
+
+  IF (v_row->>'unread')::INT <> 1 THEN
+    RAISE EXCEPTION 'FAIL: expected one unread, got %', v_row->>'unread';
+  END IF;
+  IF (v_row->>'latest_inbound')::BIGINT <> 7100 THEN
+    RAISE EXCEPTION 'FAIL: the cursor to write back is %',
+      v_row->>'latest_inbound';
+  END IF;
+  -- The newest envelope is the one just sent, or the preview is stale.
+  IF (v_row->'last_message'->>'id')::BIGINT <> 7100 THEN
+    RAISE EXCEPTION 'FAIL: the preview is not the newest message';
+  END IF;
+  -- Present and null: null is "the default", which the client names. A missing
+  -- key would mean the level was never asked for at all.
+  IF NOT (v_row ? 'level') THEN
+    RAISE EXCEPTION 'FAIL: the notification level is missing entirely';
+  END IF;
+  RAISE NOTICE 'ok  and carries the badge, the cursor and the level with it';
+END $$;
+
+-- And the cursor it hands back is the one that clears the badge — they have to
+-- come from the same read, or marking read would skip whatever arrived between
+-- two calls.
+DO $$
+DECLARE v_row JSONB;
+BEGIN
+  PERFORM mark_read('dm'::read_scope,
+                    'cccc0000-0000-4000-8000-000000000002',
+                    (dm_conversations()->'conversations'->0->>'latest_inbound')::BIGINT);
+  v_row := dm_conversations()->'conversations'->0;
+  IF (v_row->>'unread')::INT <> 0 THEN
+    RAISE EXCEPTION 'FAIL: reading it left % unread', v_row->>'unread';
+  END IF;
+  RAISE NOTICE 'ok  and the cursor it hands back is the one that clears it';
 END $$;
 
 -- ============================================================
