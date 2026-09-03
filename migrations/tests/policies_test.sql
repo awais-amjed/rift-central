@@ -749,15 +749,21 @@ BEGIN
     RAISE EXCEPTION 'FAIL: one request made the rest of the directory visible';
   END IF;
 
-  v := friend_list();
-  IF jsonb_array_length(v->'incoming') <> 1 THEN
+  v := friend_bucket('incoming');
+  IF jsonb_array_length(v->'rows') <> 1 THEN
     RAISE EXCEPTION 'FAIL: the request is not in dave''s incoming list';
   END IF;
-  IF (v->'incoming'->0->>'handle') <> 'alice_test' THEN
+  IF (v->'rows'->0->>'handle') <> 'alice_test' THEN
     RAISE EXCEPTION 'FAIL: the incoming request has no handle on it';
   END IF;
-  IF jsonb_array_length(v->'outgoing') <> 0 THEN
+  IF jsonb_array_length(friend_bucket('outgoing')->'rows') <> 0 THEN
     RAISE EXCEPTION 'FAIL: a received request was counted as sent';
+  END IF;
+  -- And the count agrees with the rows, since the badge is drawn from the
+  -- count and the tab from the rows.
+  IF (friend_counts()->>'incoming')::INT <> 1
+     OR (friend_counts()->>'outgoing')::INT <> 0 THEN
+    RAISE EXCEPTION 'FAIL: the counts disagree with the buckets: %', friend_counts();
   END IF;
   RAISE NOTICE 'ok  a request shows the asker''s handle, and nobody else''s';
 END $$;
@@ -871,11 +877,18 @@ BEGIN
   END;
 
   -- The blocked account is still listed *by handle*, or it could not be
-  -- unblocked. `friend_list` is SECURITY DEFINER for exactly this row.
-  v := friend_list();
-  IF jsonb_array_length(v->'blocked') <> 1
-     OR (v->'blocked'->0->>'handle') <> 'bob_test' THEN
+  -- unblocked. `friend_bucket` is SECURITY DEFINER for exactly this row.
+  v := friend_bucket('blocked');
+  IF jsonb_array_length(v->'rows') <> 1
+     OR (v->'rows'->0->>'handle') <> 'bob_test' THEN
     RAISE EXCEPTION 'FAIL: the block list cannot name who is on it';
+  END IF;
+  -- And a blocked peer's conversation leaves the list, in the query rather
+  -- than in the client — see section 9.
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(
+               dm_conversations()->'conversations') c
+              WHERE c->>'peer_id' = 'cccc0000-0000-4000-8000-000000000002') THEN
+    RAISE EXCEPTION 'FAIL: a blocked peer is still in the conversation list';
   END IF;
   RAISE NOTICE 'ok  blocking ends the friendship and stays undoable';
 END $$;
@@ -978,12 +991,177 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 
-  BEGIN
-    PERFORM _friend_bucket('cccc0000-0000-4000-8000-000000000002', 'accepted', NULL);
-    RAISE EXCEPTION 'FAIL: an account read someone else''s friend list';
-  EXCEPTION WHEN insufficient_privilege THEN NULL;
-  END;
+  -- Reading somebody else's list is not refused any more — it is unsayable.
+  -- `_friend_bucket` took the account to answer about as a parameter, and this
+  -- checked that a caller could not pass a stranger's id to it. `friend_bucket`
+  -- (014) has no such parameter: it answers about `auth.uid()` and there is
+  -- nowhere to name anyone else. That is the better shape, so what is asserted
+  -- is that the hole is gone rather than guarded.
+  IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND p.proname = '_friend_bucket') THEN
+    RAISE EXCEPTION 'FAIL: a function that answers about a named account is back';
+  END IF;
+  IF pg_get_function_identity_arguments(
+       'friend_bucket(TEXT, TEXT, INTEGER)'::regprocedure) LIKE '%uuid%' THEN
+    RAISE EXCEPTION 'FAIL: friend_bucket can be pointed at another account';
+  END IF;
   RAISE NOTICE 'ok  every relationship change goes through an RPC';
+END $$;
+
+RESET ROLE;
+
+-- ============================================================
+-- 9. The friends graph a tab at a time (014)
+-- ============================================================
+-- `friend_list` answered all four buckets at once because the client needed all
+-- of them to draw anything. It no longer does: the counts feed the badge and
+-- the tab labels, the per-peer state rides on the conversation row, and what is
+-- left is three lists that only their own tab reads.
+--
+-- Its fixtures are its own — five friends for bob to page through and one
+-- stranger to walk the state machine with — because the sections above leave
+-- alice and bob mid-relationship and a test that assumed otherwise would be
+-- asserting the order of this file rather than the behaviour.
+
+RESET ROLE;
+
+INSERT INTO auth.users (id)
+SELECT ('cccc0000-0000-4000-8000-0000000001' || lpad(i::TEXT, 2, '0'))::UUID
+  FROM generate_series(1, 5) i;
+INSERT INTO users (id, handle, chat_public_key, signing_public_key)
+SELECT ('cccc0000-0000-4000-8000-0000000001' || lpad(i::TEXT, 2, '0'))::UUID,
+       'pal' || i, 'chat-pal' || i, 'sign-pal' || i
+  FROM generate_series(1, 5) i;
+INSERT INTO friendships (low_id, high_id, status, requester_id)
+SELECT LEAST('cccc0000-0000-4000-8000-000000000002'::UUID, p.id),
+       GREATEST('cccc0000-0000-4000-8000-000000000002'::UUID, p.id),
+       'accepted', 'cccc0000-0000-4000-8000-000000000002'
+  FROM users p WHERE p.handle LIKE 'pal%';
+
+INSERT INTO auth.users (id) VALUES ('cccc0000-0000-4000-8000-0000000002ff');
+INSERT INTO users (id, handle, chat_public_key, signing_public_key)
+VALUES ('cccc0000-0000-4000-8000-0000000002ff', 'stranger',
+        'chat-stranger', 'sign-stranger');
+
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+-- Where one account stands with one person, asked about that person rather
+-- than derived from four whole lists.
+DO $$
+BEGIN
+  IF app_friend_state('cccc0000-0000-4000-8000-0000000002ff') <> 'none' THEN
+    RAISE EXCEPTION 'FAIL: two strangers are not strangers: %',
+      app_friend_state('cccc0000-0000-4000-8000-0000000002ff');
+  END IF;
+
+  PERFORM friend_request('cccc0000-0000-4000-8000-0000000002ff');
+  IF app_friend_state('cccc0000-0000-4000-8000-0000000002ff') <> 'outgoing' THEN
+    RAISE EXCEPTION 'FAIL: a request this account sent reads as %',
+      app_friend_state('cccc0000-0000-4000-8000-0000000002ff');
+  END IF;
+
+  -- The same row, from the other side. Getting these two backwards is the one
+  -- way this function can be wrong without looking wrong.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-0000000002ff","role":"authenticated"}', true);
+  IF app_friend_state('cccc0000-0000-4000-8000-000000000002') <> 'incoming' THEN
+    RAISE EXCEPTION 'FAIL: a request received reads as %',
+      app_friend_state('cccc0000-0000-4000-8000-000000000002');
+  END IF;
+
+  PERFORM respond_friend_request('cccc0000-0000-4000-8000-000000000002', TRUE);
+  IF app_friend_state('cccc0000-0000-4000-8000-000000000002') <> 'friends' THEN
+    RAISE EXCEPTION 'FAIL: accepting did not make them friends';
+  END IF;
+  RAISE NOTICE 'ok  one peer''s state is asked about, not derived from a graph';
+END $$;
+
+-- Paging, on the handle. A handle is unique, so it is a total order on its own
+-- and needs no tiebreaker — unlike a display name, which is why the member
+-- roster's cursor (self-hosted 039) carries an id alongside it.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE
+  v_page  JSONB;
+  v_walk  TEXT[] := ARRAY[]::TEXT[];
+  v_after TEXT;
+  v_all   TEXT[];
+  v_n     INT;
+BEGIN
+  v_n := (friend_counts()->>'friends')::INT;
+  SELECT array_agg(e->>'handle' ORDER BY e->>'handle') INTO v_all
+    FROM jsonb_array_elements(friend_bucket('friends', NULL, 100)->'rows') e;
+
+  -- The count and the rows are two different queries behind one screen, so a
+  -- disagreement is a badge that never matches the tab under it.
+  IF v_n <> array_length(v_all, 1) THEN
+    RAISE EXCEPTION 'FAIL: the count says % and the tab holds %',
+      v_n, array_length(v_all, 1);
+  END IF;
+  IF v_n < 6 THEN
+    RAISE EXCEPTION 'FAIL: too few friends for the seam to mean anything: %', v_n;
+  END IF;
+
+  -- Walked two at a time, which puts several seams inside the list where a
+  -- skipped or repeated row would show.
+  LOOP
+    v_page := friend_bucket('friends', v_after, 2);
+    EXIT WHEN jsonb_array_length(v_page->'rows') = 0;
+    SELECT v_walk || array_agg(e->>'handle' ORDER BY e->>'handle') INTO v_walk
+      FROM jsonb_array_elements(v_page->'rows') e;
+    v_after := v_walk[array_length(v_walk, 1)];
+    EXIT WHEN NOT (v_page->>'has_more')::BOOLEAN;
+  END LOOP;
+
+  IF v_walk <> v_all THEN
+    RAISE EXCEPTION 'FAIL: paging lost or repeated a row: % vs %', v_walk, v_all;
+  END IF;
+
+  -- A page exactly the limit long is the end, not a promise of another — the
+  -- bug the spare row exists to avoid.
+  IF (friend_bucket('friends', NULL, v_n)->>'has_more')::BOOLEAN THEN
+    RAISE EXCEPTION 'FAIL: an exact page promised one more friend';
+  END IF;
+  IF NOT (friend_bucket('friends', NULL, v_n - 1)->>'has_more')::BOOLEAN THEN
+    RAISE EXCEPTION 'FAIL: all but one friend claimed to be all of them';
+  END IF;
+  RAISE NOTICE 'ok  a tab pages on the handle, and an exact page is the end';
+END $$;
+
+-- The conversation row carries the state, which is the whole reason
+-- `app_friend_state` exists: the tile's menu asks it, and holding the graph to
+-- answer was the cost.
+DO $$
+DECLARE v_row JSONB;
+BEGIN
+  v_row := dm_conversations()->'conversations'->0;
+  IF v_row IS NULL THEN
+    RAISE EXCEPTION 'FAIL: bob has no conversation, so this proves nothing';
+  END IF;
+  IF NOT (v_row ? 'state') THEN
+    RAISE EXCEPTION 'FAIL: the conversation row does not carry a state at all';
+  END IF;
+  -- Never 'blocked': those conversations are gone from the list entirely.
+  IF (v_row->>'state') = 'blocked' THEN
+    RAISE EXCEPTION 'FAIL: a blocked peer''s conversation is still listed';
+  END IF;
+  RAISE NOTICE 'ok  and rides on the conversation row that needs it';
+END $$;
+
+-- A bucket nobody is in is an empty list rather than a null the client guards.
+DO $$
+BEGIN
+  IF friend_bucket('blocked')->'rows' <> '[]'::jsonb THEN
+    RAISE EXCEPTION 'FAIL: an empty bucket is not an empty list';
+  END IF;
+  IF (friend_counts()->>'blocked')::INT <> 0 THEN
+    RAISE EXCEPTION 'FAIL: an empty block list counted as non-empty';
+  END IF;
+  RAISE NOTICE 'ok  and an empty tab is a list, not a null';
 END $$;
 
 RESET ROLE;
