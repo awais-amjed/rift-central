@@ -26,7 +26,7 @@ sentence on screen rather than months of undelivered pings.
 
 ## The code
 
-`central_edge_functions/supabase/functions/push_send/relay.ts` is the whole
+`functions/push_send/relay.ts` is the whole
 relay, and it has **no imports** — `fetch`, `crypto.subtle`, `btoa` and
 `Response` exist in Deno, Node 18+ and Workers alike. Database access is plain
 PostgREST rather than the Supabase client, for the same reason: one less

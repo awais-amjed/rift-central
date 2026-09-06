@@ -13,7 +13,7 @@
 import {
   createRelay,
   relayConfigFromEnv,
-} from "../central_edge_functions/supabase/functions/push_send/relay.ts";
+} from "../functions/push_send/relay.ts";
 
 let handle;
 
