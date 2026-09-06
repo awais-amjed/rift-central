@@ -1164,5 +1164,31 @@ BEGIN
   RAISE NOTICE 'ok  and an empty tab is a list, not a null';
 END $$;
 
+
+-- ============================================================
+-- Asking whether a handle is free, before there is an account (016)
+-- ============================================================
+-- Sign-up asks this as `anon`. It answers a boolean and nothing else: it
+-- never says yes to a name the CHECK constraint would refuse, and never says
+-- who holds one that is taken.
+SET LOCAL ROLE anon;
+DO $$
+BEGIN
+  IF is_handle_available('bob_test') THEN
+    RAISE EXCEPTION 'FAIL: a taken handle reads as free';
+  END IF;
+  IF NOT is_handle_available('nobody_yet') THEN
+    RAISE EXCEPTION 'FAIL: a free handle reads as taken';
+  END IF;
+  -- Folded the way the directory is, so `Bob_Test` is not a second free name.
+  IF is_handle_available(' Bob_Test ') THEN
+    RAISE EXCEPTION 'FAIL: case and whitespace made a taken handle look free';
+  END IF;
+  IF is_handle_available('no') OR is_handle_available('has space') THEN
+    RAISE EXCEPTION 'FAIL: a handle the constraint would refuse reads as free';
+  END IF;
+  RAISE NOTICE 'ok  sign-up can ask whether a handle is free, and only that';
+END $$;
+
 RESET ROLE;
 ROLLBACK;
