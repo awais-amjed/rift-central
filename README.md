@@ -20,12 +20,15 @@ sender, not the text, not the server or the channel. The payload is empty.
 ## Layout
 
 ```
-migrations/         the schema, applied in filename order
-migrations/tests/   policy tests — what each role may actually reach
-functions/          edge functions: publish_server, push_send
-relay/              the push relay's hosts — Node, Cloudflare, or the function
-scripts/db_test.sh  runs the policy tests against a scratch database
+migrations/                 the schema, applied in filename order
+migrations/tests/           policy tests — what each role may actually reach
+supabase/functions/         edge functions: publish_server, push_send
+relay/                      the push relay's hosts — Node, Cloudflare, or the function
+scripts/db_test.sh          runs the policy tests against a scratch database
 ```
+
+`supabase/functions/` rather than `functions/` because that is the layout the
+Supabase CLI deploys from; it is not a directory anybody chose.
 
 ## The policy tests
 
@@ -42,12 +45,31 @@ development stack runs.
 
 ## The relay
 
-`functions/push_send/relay.ts` has **no imports** — `fetch`, `crypto.subtle`,
+`supabase/functions/push_send/relay.ts` has **no imports** — `fetch`, `crypto.subtle`,
 `btoa` and `Response` exist in Deno, Node 18+ and Workers alike — so the same
 source runs in all three places and `relay/` holds only the adapters. See
 `relay/README.md` for the ceiling on Workers, which is measured rather than
 guessed, and for why the relay is addressed by a hostname Rift owns rather than
 a vendor URL.
+
+## Deploying
+
+```bash
+supabase functions deploy publish_server --project-ref <ref>
+
+# push_send is called by a database trigger, which carries no JWT.
+TMPDIR=$HOME/tmp supabase functions deploy push_send \
+  --project-ref <ref> --no-verify-jwt
+```
+
+`TMPDIR` has to point somewhere Docker Desktop shares. `/tmp` is not, and the
+bundler fails with "path is not shared from the host" rather than saying so.
+
+Migrations go through the SQL editor or `psql`, in filename order. There is no
+migrator here — this is one project with one operator, and the ledger that
+makes `rift-self-host` upgradable exists because that repo has neither.
+
+The relay is deployed separately; see `relay/README.md`.
 
 ## What is not here
 

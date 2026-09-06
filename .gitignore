@@ -2,9 +2,11 @@
 node_modules/
 *.log
 
-# Supabase CLI state. `linked-project.json` names the project this checkout is
-# pointed at, which is not something a public repository should carry.
-supabase/
+# Supabase CLI state — *not* the whole `supabase/` directory, which is where
+# the functions live and is the layout the CLI deploys from.
+# `linked-project.json` names the project a checkout is pointed at, which is not
+# something a public repository should carry.
+supabase/.temp/
 **/.temp/
 
 # Wrangler's local state for the relay Worker.

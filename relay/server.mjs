@@ -14,7 +14,7 @@ import { Buffer } from "node:buffer";
 import {
   createRelay,
   relayConfigFromEnv,
-} from "../functions/push_send/relay.ts";
+} from "../supabase/functions/push_send/relay.ts";
 
 const handle = createRelay(relayConfigFromEnv());
 const port = Number(process.env.PORT ?? 8080);
