@@ -73,6 +73,18 @@ The relay is deployed separately; see `relay/README.md`.
 
 ## What is not here
 
-The self-hosted server's schema and endpoints are in `rift-self-host`; the
-client is in `rift`. A migration here and a migration there are different
-databases with different operators, which is the whole point of the split.
+A migration here and a migration in `rift-self-host` are different databases
+with different operators, which is the whole point of the split. Nothing in this
+repository is something a self-hoster runs.
+
+## Where this sits
+
+Rift is five repositories, meant to be cloned as siblings.
+
+| Repo | Holds |
+|---|---|
+| `rift` | the client: Flutter app, Rust crate, `rift_crypto` |
+| `rift-self-host` | a server's schema, endpoints and console — anyone runs one |
+| `rift-central` | accounts, the public directory, the push relay — we run it |
+| `rift-bot-sdk` | the TypeScript bot SDK |
+| `rift-website` | joinrift.app, and the self-hosting docs |
