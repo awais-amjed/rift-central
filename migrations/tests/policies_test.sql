@@ -294,6 +294,14 @@ BEGIN
     RAISE EXCEPTION 'FAIL: an edit backdated the message';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
+  -- edited_at is the trigger's to stamp, not the author's to choose. Naming it
+  -- refuses the whole update, envelope included — the app once sent it with
+  -- every edit, and every central DM edit failed.
+  BEGIN
+    UPDATE dm_messages SET ciphertext = 'hidden edit', edited_at = NULL WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: an edit chose its own edited_at';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
 
   -- Then the trigger, for the columns that *are* writable: it pins everything
   -- else to its old value and stamps edited_at itself.
