@@ -60,7 +60,24 @@ supabase functions deploy publish_server --project-ref <ref>
 # push_send is called by a database trigger, which carries no JWT.
 TMPDIR=$HOME/tmp supabase functions deploy push_send \
   --project-ref <ref> --no-verify-jwt
+
+# sweep_dm_attachments is called by a daily pg_cron job (018), also JWT-less.
+TMPDIR=$HOME/tmp supabase functions deploy sweep_dm_attachments \
+  --project-ref <ref> --no-verify-jwt
 ```
+
+The attachment sweep needs one secret, set in two places that must match:
+the function's `ATTACHMENT_SWEEP_SECRET` (`supabase secrets set`), and the row
+it is sent from, which nothing but the database can read:
+
+```sql
+INSERT INTO attachment_sweep_config (endpoint, secret) VALUES
+  ('https://<ref>.supabase.co/functions/v1/sweep_dm_attachments', '<secret>')
+ON CONFLICT (id) DO UPDATE SET endpoint = EXCLUDED.endpoint, secret = EXCLUDED.secret;
+```
+
+Without that row the daily job does nothing, and attachments of expired DMs
+stay in storage.
 
 `TMPDIR` has to point somewhere Docker Desktop shares. `/tmp` is not, and the
 bundler fails with "path is not shared from the host" rather than saying so.

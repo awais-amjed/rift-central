@@ -1198,5 +1198,78 @@ BEGIN
   RAISE NOTICE 'ok  sign-up can ask whether a handle is free, and only that';
 END $$;
 
+-- ============================================================
+-- Central DM attachments (017)
+-- ============================================================
+-- Blobs are written as `<uploader uid>/<random>.bin`. Rows are inserted as the
+-- superuser because a member's INSERT is 005's to test, and the backdated ones
+-- stand in for blobs whose messages retention has already removed.
+
+RESET ROLE;
+INSERT INTO storage.objects (bucket_id, name, owner, created_at) VALUES
+  ('central-dm-attachments', 'cccc0000-0000-4000-8000-000000000001/alice-new.bin', 'cccc0000-0000-4000-8000-000000000001', now()),
+  ('central-dm-attachments', 'cccc0000-0000-4000-8000-000000000002/bob-new.bin',   'cccc0000-0000-4000-8000-000000000002', now()),
+  ('central-dm-attachments', 'cccc0000-0000-4000-8000-000000000001/alice-old.bin', 'cccc0000-0000-4000-8000-000000000001', now() - interval '40 days'),
+  ('central-dm-attachments', 'cccc0000-0000-4000-8000-000000000002/bob-30d.bin',   'cccc0000-0000-4000-8000-000000000002', now() - interval '30 days'),
+  ('backups',                'cccc0000-0000-4000-8000-000000000001/vault-old.bin', 'cccc0000-0000-4000-8000-000000000001', now() - interval '90 days');
+
+SET LOCAL ROLE authenticated;
+
+DO $$
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+
+  DELETE FROM storage.objects WHERE name = 'cccc0000-0000-4000-8000-000000000002/bob-new.bin';
+  DELETE FROM storage.objects WHERE name = 'cccc0000-0000-4000-8000-000000000001/alice-new.bin';
+
+  IF NOT EXISTS (SELECT 1 FROM storage.objects WHERE name = 'cccc0000-0000-4000-8000-000000000002/bob-new.bin') THEN
+    RAISE EXCEPTION 'FAIL: a member deleted another member''s attachment';
+  END IF;
+  -- Without 017's policy this delete matched nothing and raised nothing, which
+  -- is exactly how the app's "delete the message's files" call freed no bytes.
+  IF EXISTS (SELECT 1 FROM storage.objects WHERE name = 'cccc0000-0000-4000-8000-000000000001/alice-new.bin') THEN
+    RAISE EXCEPTION 'FAIL: a member could not delete their own attachment';
+  END IF;
+  RAISE NOTICE 'ok  a member deletes their own attachments and nobody else''s';
+END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM expired_dm_attachments();
+    RAISE EXCEPTION 'FAIL: a member listed other people''s expired attachments';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM request_attachment_sweep();
+    RAISE EXCEPTION 'FAIL: a member triggered the attachment sweep';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM 1 FROM attachment_sweep_config;
+    RAISE EXCEPTION 'FAIL: a member read the sweep''s secret';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  the sweep, its list and its secret are out of members'' reach';
+END $$;
+
+SET LOCAL ROLE service_role;
+
+DO $$
+DECLARE v_names TEXT[];
+BEGIN
+  v_names := expired_dm_attachments();
+  -- Not bob's 30-day blob: its message may still exist until retention runs.
+  -- Not the old vault backup: another bucket, kept on its own terms.
+  IF v_names IS DISTINCT FROM ARRAY['cccc0000-0000-4000-8000-000000000001/alice-old.bin'] THEN
+    RAISE EXCEPTION 'FAIL: the sweep would remove %', v_names;
+  END IF;
+  IF cardinality(expired_dm_attachments(0)) <> 0 THEN
+    RAISE EXCEPTION 'FAIL: a zero limit still listed attachments';
+  END IF;
+  RAISE NOTICE 'ok  the sweep lists central attachments older than 31 days, and only those';
+END $$;
+
 RESET ROLE;
 ROLLBACK;
