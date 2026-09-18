@@ -1328,6 +1328,28 @@ BEGIN
   RAISE NOTICE 'ok  a send past 500 removes the conversation''s oldest message, and only that';
 END $$;
 
+-- ---------- one conversation, in the list's own shape (021) ----------
+
+DO $$
+DECLARE v JSONB;
+BEGIN
+  v := dm_conversations(30, NULL, 'cccc0000-0000-4000-8000-000000000006');
+  IF jsonb_array_length(v->'conversations') <> 1
+     OR v->'conversations'->0->>'peer_id' <> 'cccc0000-0000-4000-8000-000000000006'
+     OR v->'conversations'->0->'last_message'->>'ciphertext' <> 'the 501st'
+     OR (v->>'has_more')::boolean THEN
+    RAISE EXCEPTION 'FAIL: asking for one conversation answered %', v;
+  END IF;
+  IF v->'conversations'->0 IS DISTINCT FROM dm_conversations()->'conversations'->0 THEN
+    RAISE EXCEPTION 'FAIL: one conversation is not the same row as the list''s';
+  END IF;
+  v := dm_conversations(30, NULL, 'cccc0000-0000-4000-8000-000000000001');
+  IF jsonb_array_length(v->'conversations') <> 0 THEN
+    RAISE EXCEPTION 'FAIL: a conversation that does not exist was answered with %', v;
+  END IF;
+  RAISE NOTICE 'ok  one conversation comes back as the list draws it, or not at all';
+END $$;
+
 RESET ROLE;
 
 DO $$ BEGIN
