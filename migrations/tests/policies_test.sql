@@ -1272,4 +1272,71 @@ BEGIN
 END $$;
 
 RESET ROLE;
+
+-- ---------- a conversation is held to 500 as it is written ----------
+-- 019 moved the cap from a nightly ranking of the whole table into send_dm.
+-- A conversation already at the cap loses its oldest message on the next send,
+-- and nobody else's conversation is touched.
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims', '{}', true); END $$;
+
+INSERT INTO auth.users (id) VALUES
+  ('cccc0000-0000-4000-8000-000000000005'),  -- erin
+  ('cccc0000-0000-4000-8000-000000000006');  -- finn
+INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+  ('cccc0000-0000-4000-8000-000000000005', 'erin_test', 'chat-erin', 'sign-erin'),
+  ('cccc0000-0000-4000-8000-000000000006', 'finn_test', 'chat-finn', 'sign-finn');
+INSERT INTO friendships (low_id, high_id, requester_id, status) VALUES
+  ('cccc0000-0000-4000-8000-000000000005',
+   'cccc0000-0000-4000-8000-000000000006',
+   'cccc0000-0000-4000-8000-000000000006', 'accepted');
+
+-- Two days old, so they fill the conversation without spending today's quota.
+INSERT INTO dm_messages
+       (sender_id, recipient_id, ciphertext, nonce, signature, key_version, created_at)
+SELECT CASE WHEN g % 2 = 0 THEN 'cccc0000-0000-4000-8000-000000000005'::uuid
+            ELSE 'cccc0000-0000-4000-8000-000000000006'::uuid END,
+       CASE WHEN g % 2 = 0 THEN 'cccc0000-0000-4000-8000-000000000006'::uuid
+            ELSE 'cccc0000-0000-4000-8000-000000000005'::uuid END,
+       'old-' || g, 'n', 's', 1, now() - interval '2 days'
+  FROM generate_series(1, 500) g;
+
+CREATE TEMP TABLE others_before AS
+  SELECT count(*) AS n FROM dm_messages
+   WHERE 'cccc0000-0000-4000-8000-000000000005' NOT IN (sender_id, recipient_id);
+GRANT SELECT ON others_before TO authenticated;
+
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000005","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v_count INTEGER;
+BEGIN
+  PERFORM send_dm('cccc0000-0000-4000-8000-000000000006', 'the 501st', 'n', 's', 1);
+  SELECT count(*) INTO v_count FROM dm_messages;  -- erin sees exactly this pair
+  IF v_count <> 500 THEN
+    RAISE EXCEPTION 'FAIL: the conversation holds % messages, not 500', v_count;
+  END IF;
+  IF EXISTS (SELECT 1 FROM dm_messages WHERE ciphertext = 'old-1') THEN
+    RAISE EXCEPTION 'FAIL: the oldest message survived the cap';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM dm_messages WHERE ciphertext = 'old-2')
+     OR NOT EXISTS (SELECT 1 FROM dm_messages WHERE ciphertext = 'the 501st') THEN
+    RAISE EXCEPTION 'FAIL: the cap removed more than the one message past it';
+  END IF;
+  RAISE NOTICE 'ok  a send past 500 removes the conversation''s oldest message, and only that';
+END $$;
+
+RESET ROLE;
+
+DO $$ BEGIN
+  IF (SELECT count(*) FROM dm_messages
+       WHERE 'cccc0000-0000-4000-8000-000000000005' NOT IN (sender_id, recipient_id))
+     <> (SELECT n FROM others_before) THEN
+    RAISE EXCEPTION 'FAIL: capping one conversation deleted from another';
+  END IF;
+  RAISE NOTICE 'ok  capping one conversation leaves every other one alone';
+END $$;
+
 ROLLBACK;

@@ -9,7 +9,7 @@
 # The suite ends in ROLLBACK, so it writes nothing. A failure raises, which
 # aborts the transaction and exits non-zero.
 #
-# Only the migrations that define reachable surface are applied. 004 and 018
+# Only the migrations that define reachable surface are applied. 004, 018, 020
 # (scheduling, which pg_cron only allows in one database), 006 (a drop), 008
 # (realtime) and 015 are not what these tests are about, so the list is
 # explicit rather than a glob.
@@ -87,7 +87,7 @@ DO $$ BEGIN CREATE PUBLICATION supabase_realtime;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 SQL
 
-for f in 001_schema 002_security 003_api 005_storage 007_public_servers 009_push 010_push_relays 011_notifications 012_friends 013_dm_conversations 014_friend_paging 016_handle_at_signup 017_attachment_cleanup; do
+for f in 001_schema 002_security 003_api 005_storage 007_public_servers 009_push 010_push_relays 011_notifications 012_friends 013_dm_conversations 014_friend_paging 016_handle_at_signup 017_attachment_cleanup 019_dm_scale; do
   psql_migrate -f - < "$ROOT/migrations/$f.sql" >/dev/null
 done
 
