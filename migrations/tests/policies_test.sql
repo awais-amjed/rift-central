@@ -1350,6 +1350,88 @@ BEGIN
   RAISE NOTICE 'ok  one conversation comes back as the list draws it, or not at all';
 END $$;
 
+-- ---------- 022: the list is read from a head nobody else can see ----------
+-- The conversation list used to find each peer's newest message by reading
+-- every message the caller had ever sent or received. `dm_conversation_heads`
+-- is that answer, kept as it is written — so the list costs a page instead of
+-- a history. It is also a map of who talks to whom, which is why no account
+-- can read it.
+
+DO $$
+BEGIN
+  PERFORM 1 FROM dm_conversation_heads;
+  RAISE EXCEPTION 'FAIL: an account can read who talks to whom';
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'ok  the conversation heads are out of every account''s reach';
+END $$;
+
+RESET ROLE;
+
+DO $$
+DECLARE
+  v_erin   UUID := 'cccc0000-0000-4000-8000-000000000005';
+  v_finn   UUID := 'cccc0000-0000-4000-8000-000000000006';
+  v_newest BIGINT;
+  v_second BIGINT;
+  v_row    JSONB;
+BEGIN
+  SELECT max(d.id) INTO v_newest FROM dm_messages d
+   WHERE LEAST(d.sender_id, d.recipient_id)    = LEAST(v_erin, v_finn)
+     AND GREATEST(d.sender_id, d.recipient_id) = GREATEST(v_erin, v_finn);
+
+  IF (SELECT last_message_id FROM dm_conversation_heads
+       WHERE user_id = v_erin AND peer_id = v_finn) IS DISTINCT FROM v_newest
+     OR (SELECT last_message_id FROM dm_conversation_heads
+          WHERE user_id = v_finn AND peer_id = v_erin) IS DISTINCT FROM v_newest THEN
+    RAISE EXCEPTION 'FAIL: a head does not point at the conversation''s newest message';
+  END IF;
+  RAISE NOTICE 'ok  both sides of a conversation point at its newest message';
+
+  -- The only delete that moves a head, and the one neither the 500 cap nor
+  -- the retention job ever performs: they take the oldest.
+  SELECT max(d.id) INTO v_second FROM dm_messages d
+   WHERE LEAST(d.sender_id, d.recipient_id)    = LEAST(v_erin, v_finn)
+     AND GREATEST(d.sender_id, d.recipient_id) = GREATEST(v_erin, v_finn)
+     AND d.id < v_newest;
+
+  DELETE FROM dm_messages WHERE id = v_newest;
+
+  IF (SELECT last_message_id FROM dm_conversation_heads
+       WHERE user_id = v_erin AND peer_id = v_finn) IS DISTINCT FROM v_second
+     OR (SELECT last_message_id FROM dm_conversation_heads
+          WHERE user_id = v_finn AND peer_id = v_erin) IS DISTINCT FROM v_second THEN
+    RAISE EXCEPTION 'FAIL: deleting the newest message left a head pointing at it';
+  END IF;
+
+  -- And the list agrees, which is the only reason the head exists. auth.uid()
+  -- is erin whatever the role is, and dm_conversations is SECURITY DEFINER.
+  v_row := dm_conversations(30, NULL, v_finn)->'conversations'->0;
+  IF (v_row->'last_message'->>'id')::BIGINT IS DISTINCT FROM v_second THEN
+    RAISE EXCEPTION 'FAIL: the list previews % after the newest was deleted',
+      v_row->'last_message'->>'id';
+  END IF;
+  RAISE NOTICE 'ok  deleting the newest message walks the head back, and the list with it';
+
+  -- An emptied conversation is not a conversation. Without this the list
+  -- carries a peer whose last message cannot be joined, and the tile vanishes
+  -- from the page it was counted into.
+  DELETE FROM dm_messages d
+   WHERE LEAST(d.sender_id, d.recipient_id)    = LEAST(v_erin, v_finn)
+     AND GREATEST(d.sender_id, d.recipient_id) = GREATEST(v_erin, v_finn);
+
+  IF EXISTS (SELECT 1 FROM dm_conversation_heads
+              WHERE (user_id = v_erin AND peer_id = v_finn)
+                 OR (user_id = v_finn AND peer_id = v_erin)) THEN
+    RAISE EXCEPTION 'FAIL: an emptied conversation kept its head';
+  END IF;
+  IF jsonb_array_length(dm_conversations()->'conversations') <> 0 THEN
+    RAISE EXCEPTION 'FAIL: an emptied conversation is still in the list';
+  END IF;
+  RAISE NOTICE 'ok  and an emptied conversation leaves the list entirely';
+END $$;
+
+DO $$ BEGIN EXECUTE 'SET LOCAL ROLE authenticated'; END $$;
+
 RESET ROLE;
 
 DO $$ BEGIN

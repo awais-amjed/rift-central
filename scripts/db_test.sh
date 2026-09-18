@@ -87,7 +87,7 @@ DO $$ BEGIN CREATE PUBLICATION supabase_realtime;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 SQL
 
-for f in 001_schema 002_security 003_api 005_storage 007_public_servers 009_push 010_push_relays 011_notifications 012_friends 013_dm_conversations 014_friend_paging 016_handle_at_signup 017_attachment_cleanup 019_dm_scale 021_dm_realtime; do
+for f in 001_schema 002_security 003_api 005_storage 007_public_servers 009_push 010_push_relays 011_notifications 012_friends 013_dm_conversations 014_friend_paging 016_handle_at_signup 017_attachment_cleanup 019_dm_scale 021_dm_realtime 022_a_conversation_knows_its_own_newest; do
   psql_migrate -f - < "$ROOT/migrations/$f.sql" >/dev/null
 done
 
