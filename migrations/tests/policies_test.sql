@@ -359,6 +359,82 @@ BEGIN
   RAISE NOTICE 'ok  unread counts follow the cursor, which only moves forward';
 END $$;
 
+-- The cap (023). A badge draws "99+" above ninety-nine, so counting past
+-- that is work nobody can see — and it is the kind of work that grows with
+-- the backlog rather than with the screen. Without the cap this counted
+-- every unread message a person had, forever.
+--
+-- Written as the superuser with no claim, because `attest_dm` stamps
+-- `sender_id := auth.uid()` whenever there is one: these rows would
+-- otherwise all come out as alice's own, which is exactly the case the
+-- second assertion below is about.
+RESET ROLE;
+-- '{}' rather than '': `auth.uid()` casts this to json before reaching for
+-- `sub`, and an empty string is not json.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims', '{}', true); END $$;
+
+DO $$
+DECLARE v_cap INT := unread_cap();
+BEGIN
+  -- Ids by hand, like the rest of the fixtures, and above alice's cursor at
+  -- 7001 so they are genuinely unread. They are removed again at the end of
+  -- this section, which is what leaves section 6 its own newest message.
+  INSERT INTO dm_messages (id, sender_id, recipient_id, ciphertext, nonce,
+                           signature, key_version)
+  SELECT 8000 + i, 'cccc0000-0000-4000-8000-000000000002',
+         'cccc0000-0000-4000-8000-000000000001', 'over-the-cap', 'n', 's', 1
+    FROM generate_series(0, v_cap + 4) i;
+
+  -- And some of alice's own, which must never count as her unread mail.
+  INSERT INTO dm_messages (id, sender_id, recipient_id, ciphertext, nonce,
+                           signature, key_version)
+  SELECT 8500 + i, 'cccc0000-0000-4000-8000-000000000001',
+         'cccc0000-0000-4000-8000-000000000002', 'mine', 'n', 's', 1
+    FROM generate_series(0, 4) i;
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE v_n INT;
+BEGIN
+  v_n := (unread_counts()->'dms'->>'cccc0000-0000-4000-8000-000000000002')::INT;
+  IF v_n IS DISTINCT FROM unread_cap() THEN
+    RAISE EXCEPTION 'FAIL: % unread reported, expected the cap of %',
+      v_n, unread_cap();
+  END IF;
+  RAISE NOTICE 'ok  a badge stops counting at the cap';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v_n INT;
+BEGIN
+  -- Bob's side: five of alice's, well under the cap, and none of the
+  -- hundred-and-five he sent himself.
+  v_n := (unread_counts()->'dms'->>'cccc0000-0000-4000-8000-000000000001')::INT;
+  IF v_n IS DISTINCT FROM 5 THEN
+    RAISE EXCEPTION 'FAIL: bob has % unread, expected the 5 alice sent him', v_n;
+  END IF;
+  RAISE NOTICE 'ok  and counts what arrived, never what you sent';
+END $$;
+
+-- Take the backlog away again. Later sections count alice's unread mail and
+-- read her conversation list, and a hundred and ten messages this section
+-- invented would be measured as theirs.
+RESET ROLE;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims', '{}', true); END $$;
+DELETE FROM dm_messages WHERE ciphertext IN ('over-the-cap', 'mine');
+
+-- Back to alice, whose session the rest of this section is written as.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+SET LOCAL ROLE authenticated;
+
 DO $$
 BEGIN
   -- Own-row only, which is also what keeps this from being a read receipt.
