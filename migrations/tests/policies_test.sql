@@ -7,7 +7,7 @@
 -- suite as the self-hosted side.
 --
 -- Run against the central project via the Management API (see LOCAL_DEV), or
--- against any database with 001–005 applied:
+-- against any database with 001–007 applied:
 --
 --   psql "$CENTRAL_URL" -v ON_ERROR_STOP=1 \
 --     -f central_server_migrations/tests/policies_test.sql
@@ -17,6 +17,21 @@
 
 \set ON_ERROR_STOP on
 BEGIN;
+
+-- Two functions 007 gives to the service role and to nobody else, granted for
+-- the length of this transaction so the blocks below can assert what they do.
+--
+--   `publish_server` is the directory write. A client cannot call it: a
+--   listing has to be proved with a single-use token from the server being
+--   listed, and the edge function that checks that token is the only caller.
+--   What is tested here is the function's own rules — the per-account ceiling,
+--   the (url, server_id) key — which do not depend on who reaches it.
+--
+--   `unread_cap()` is the constant the badge maths stops at, read here so the
+--   assertion cannot drift away from the schema by hard-coding 100.
+GRANT EXECUTE ON FUNCTION publish_server(TEXT, UUID, TEXT, TEXT, TEXT, TEXT,
+                                         TEXT[], INTEGER, BOOLEAN) TO authenticated;
+GRANT EXECUTE ON FUNCTION unread_cap() TO authenticated;
 
 -- ── Fixtures ────────────────────────────────────────────────
 --   alice and bob have accounts; carol has an auth row but never claimed a

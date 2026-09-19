@@ -1,5 +1,13 @@
 -- ============================================================
--- Rift central server — 005: storage
+-- Rift central — 005: buckets
+-- ============================================================
+-- Two: `central-dm-attachments`, which holds the same AES-256-GCM ciphertext a
+-- DM body does, and `backups`, which holds an encrypted vault export. Central
+-- can read neither.
+-- ============================================================
+
+-- ============================================================
+-- Storage
 -- ============================================================
 -- Two private buckets, both own-folder on write so an object can only ever be
 -- placed under the uploader's own uid.
@@ -22,37 +30,29 @@ INSERT INTO storage.buckets (id, name, public, file_size_limit)
 VALUES ('central-dm-attachments', 'central-dm-attachments', false, 10485760)
 ON CONFLICT (id) DO UPDATE SET public = false, file_size_limit = 10485760;
 
--- ---------- backups ----------
-
-DROP POLICY IF EXISTS backups_select_own ON storage.objects;
 CREATE POLICY backups_select_own ON storage.objects FOR SELECT TO authenticated
   USING (bucket_id = 'backups'
          AND (storage.foldername(name))[1] = auth.uid()::text);
 
-DROP POLICY IF EXISTS backups_insert_own ON storage.objects;
 CREATE POLICY backups_insert_own ON storage.objects FOR INSERT TO authenticated
   WITH CHECK (bucket_id = 'backups'
               AND (storage.foldername(name))[1] = auth.uid()::text);
 
-DROP POLICY IF EXISTS backups_update_own ON storage.objects;
 CREATE POLICY backups_update_own ON storage.objects FOR UPDATE TO authenticated
   USING (bucket_id = 'backups'
          AND (storage.foldername(name))[1] = auth.uid()::text);
 
-DROP POLICY IF EXISTS backups_delete_own ON storage.objects;
 CREATE POLICY backups_delete_own ON storage.objects FOR DELETE TO authenticated
   USING (bucket_id = 'backups'
          AND (storage.foldername(name))[1] = auth.uid()::text);
 
--- ---------- central-dm-attachments ----------
--- Readable by any signed-in account, like the self-hosted bucket: the bytes are
--- meaningless without the in-message key and the names are unguessable.
-
-DROP POLICY IF EXISTS central_dm_att_select ON storage.objects;
 CREATE POLICY central_dm_att_select ON storage.objects FOR SELECT TO authenticated
   USING (bucket_id = 'central-dm-attachments');
 
-DROP POLICY IF EXISTS central_dm_att_insert ON storage.objects;
 CREATE POLICY central_dm_att_insert ON storage.objects FOR INSERT TO authenticated
   WITH CHECK (bucket_id = 'central-dm-attachments'
               AND (storage.foldername(name))[1] = auth.uid()::text);
+
+CREATE POLICY central_dm_att_delete ON storage.objects FOR DELETE TO authenticated
+  USING (bucket_id = 'central-dm-attachments'
+         AND (storage.foldername(name))[1] = auth.uid()::text);

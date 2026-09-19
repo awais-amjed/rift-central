@@ -37,8 +37,20 @@ Supabase CLI deploys from; it is not a directory anybody chose.
 ```
 
 Against a scratch database in any Postgres container, never against the hosted
-project — that one has real accounts on it. The scratch database gets a small
-`auth` shim so the migrations apply unchanged, and the suite ends in `ROLLBACK`.
+project — that one has real accounts on it. The scratch database gets a
+stand-in for the parts of Supabase the migrations lean on, **all seven files
+are applied**, and the suite ends in `ROLLBACK`.
+
+The stand-in is deliberately faithful rather than convenient: it installs
+Supabase's own default privileges, which grant `anon` EXECUTE on every new
+function in `public`. That is what makes the last check worth running — it
+asks what is reachable that nobody granted by name, which is a question a
+policy test cannot ask, because by the time it runs a default grant looks
+exactly like an intended one.
+
+There are seven files and they are split by kind — tables, RPCs, triggers,
+realtime, storage, jobs, security — not by feature. Each states the shape it
+is meant to have rather than how the schema got there.
 
 `RIFT_PG_CONTAINER` picks the container; it defaults to the one the app's local
 development stack runs.
