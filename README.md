@@ -12,6 +12,7 @@ things that cannot live on somebody else's machine go:
 | Encrypted vault backups | Ciphertext only; the key never leaves the device |
 | Friends, blocks, direct messages | Between people who share no server yet |
 | The public server directory | Opt-in listings, so a server can be found |
+| The public bot directory | Opt-in listings and likes, so a bot can be found |
 | The push relay | An FCM token is scoped to the app's Firebase project, so a self-hosted server cannot wake its own members' phones and has to ask |
 
 What central learns by relaying a push is a device token and a moment: not the
@@ -54,6 +55,34 @@ is meant to have rather than how the schema got there.
 
 `RIFT_PG_CONTAINER` picks the container; it defaults to the one the app's local
 development stack runs.
+
+## The two directories
+
+They look alike and are governed differently, which is the thing to know
+before changing either.
+
+A **server** listing reserves `(supabase_url, server_id)` — a pair that
+exists whether or not its owner has claimed it. So the first account to
+publish one holds the only slot, and a member of any server holds everything
+needed to publish it. `publish_server` is therefore service-role only, behind
+an edge function that redeems a one-time token against the server's own
+domain. Domain control is the one thing central can actually verify.
+
+A **bot** listing reserves nothing. It names no database central could ask,
+points at no running thing, and two accounts listing a bot of the same name
+are simply two rows. There is nothing an edge function could check, so
+`publish_bot` is granted to `authenticated` and the uniqueness is per account
+— the failure that rule avoids is an author permanently unable to list their
+own work.
+
+Ranking is a like rather than a rating. An average needs volume before it
+means anything, and what a rating would really measure — does this bot work —
+is invisible to a database that never touches the server the bot runs on.
+Installs would be the better signal and cannot be counted: adding a bot is an
+invite minted on the admin's own server, and central never hears about it.
+`public_bots.like_count` is denormalised and recounted by trigger, because
+the default browse order *is* that number and an `ORDER BY` over a subquery
+cannot use an index.
 
 ## The relay
 
