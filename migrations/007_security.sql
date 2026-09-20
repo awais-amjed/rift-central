@@ -104,10 +104,6 @@ REVOKE ALL ON FUNCTION publish_server(TEXT, UUID, TEXT, TEXT, TEXT, TEXT,
                                       TEXT[], INTEGER, BOOLEAN)
   FROM PUBLIC, anon, authenticated;
 
-GRANT EXECUTE ON FUNCTION publish_server(TEXT, UUID, TEXT, TEXT, TEXT, TEXT,
-                                         TEXT[], INTEGER, BOOLEAN)
-  TO authenticated;
-
 -- Unlike daily_dm_quota(), which the client learns through dm_quota() because
 -- what it needs is the *remaining* count, the cap is the whole answer here —
 -- an account can see its own listings and subtract. Granting the constant
@@ -301,14 +297,10 @@ GRANT EXECUTE ON FUNCTION friend_bucket(TEXT, TEXT, INTEGER)   TO authenticated;
 -- HTTP call. What this migration does is make that function the *only* way in.
 
 -- ---------- who may publish ----------
--- Taken away from `authenticated` and given to the service role. The RPC is
--- unchanged otherwise: it still owns the cap, the ownership rule and the
--- upsert. It simply can no longer be called by the person it is deciding
+-- The service role's, and nobody else's — revoked with the rest of the
+-- directory's functions above. The RPC still owns the cap, the ownership rule
+-- and the upsert; it simply cannot be called by the person it is deciding
 -- about.
-
-REVOKE EXECUTE ON FUNCTION publish_server(TEXT, UUID, TEXT, TEXT, TEXT, TEXT,
-                                          TEXT[], INTEGER, BOOLEAN)
-  FROM authenticated;
 
 REVOKE ALL ON FUNCTION publish_server_as(UUID, TEXT, UUID, TEXT, TEXT, TEXT, TEXT,
                                          TEXT[], INTEGER, BOOLEAN)
