@@ -701,6 +701,287 @@ END $$;
 
 
 -- ============================================================
+-- 7b. The public bot directory
+-- ============================================================
+-- The other half of the directory, and the one with a different answer to the
+-- same question. `publish_server` is service-role only because central cannot
+-- tell a server's admin from any of its members; `publish_bot` is not,
+-- because a bot listing reserves nothing and names no database. What is
+-- checked here is that the *rest* of the discipline survived that: the cap,
+-- own-row editing, no way in but the function, and a like that counts once.
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE
+  v  public_bots;
+  v2 public_bots;
+BEGIN
+  -- Granted to `authenticated` in 007, unlike publish_server — which the
+  -- header of this file has to grant for its own section. If that ever
+  -- changes this line fails before anything else does.
+  v := publish_bot(NULL, '  Dicebot  ', 'https://example.com/dicebot',
+                   'Rolls dice', NULL, ARRAY['games','utility'],
+                   '{"commands":[{"name":"roll","usage":"<dice>"}]}'::jsonb, TRUE);
+  IF v.owner_id <> auth.uid() THEN
+    RAISE EXCEPTION 'FAIL: the bot listing was not bound to the caller';
+  END IF;
+  IF v.name <> 'Dicebot' THEN
+    RAISE EXCEPTION 'FAIL: the bot name was stored unbtrimmed';
+  END IF;
+  IF v.like_count <> 0 THEN
+    RAISE EXCEPTION 'FAIL: a new listing did not start at zero likes';
+  END IF;
+
+  -- Editing is by id, which is what lets a bot be renamed. An upsert on the
+  -- name would leave the old row listed and spend a second slot.
+  v2 := publish_bot(v.id, 'Dicebot 2', 'https://example.com/dicebot2',
+                    'Rolls better dice', NULL, ARRAY['games'], NULL, TRUE);
+  IF v2.id <> v.id THEN
+    RAISE EXCEPTION 'FAIL: editing a listing created a second one';
+  END IF;
+  IF (SELECT count(*) FROM public_bots WHERE owner_id = auth.uid()) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: renaming a bot left the old listing behind';
+  END IF;
+  IF v2.source_url <> 'https://example.com/dicebot2' THEN
+    RAISE EXCEPTION 'FAIL: the edit did not take';
+  END IF;
+
+  BEGIN
+    PERFORM publish_bot(NULL, 'Bad tags', 'https://example.com/b', NULL, NULL,
+                        ARRAY['Not A Tag'], NULL, TRUE);
+    RAISE EXCEPTION 'FAIL: a malformed tag was accepted on a bot';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  -- Central never fetches this, but a listing that cannot say where the code
+  -- is, is a listing nobody can act on.
+  BEGIN
+    PERFORM publish_bot(NULL, 'No source', 'ftp://example.com/x', NULL, NULL,
+                        '{}', NULL, TRUE);
+    RAISE EXCEPTION 'FAIL: a bot was listed with a non-https source';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  -- Delisted, not deleted: still alice's row, out of everyone else's browse.
+  PERFORM publish_bot(NULL, 'Hidden', 'https://example.com/hidden', NULL, NULL,
+                      '{}', NULL, FALSE);
+  RAISE NOTICE 'ok  a bot listing is published, renamed and delisted by its author';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v_id UUID;
+BEGIN
+  SELECT id INTO v_id FROM public_bots WHERE name = 'Dicebot 2';
+  IF v_id IS NULL THEN
+    RAISE EXCEPTION 'FAIL: a listed bot is not visible to another account';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public_bots WHERE name = 'Hidden') THEN
+    RAISE EXCEPTION 'FAIL: a delisted bot is visible to another account';
+  END IF;
+
+  -- No INSERT or UPDATE grant: publish_bot is the only way in, which is what
+  -- makes the per-account cap unavoidable.
+  BEGIN
+    INSERT INTO public_bots (owner_id, name, source_url)
+    VALUES (auth.uid(), 'Sneaked', 'https://example.com/s');
+    RAISE EXCEPTION 'FAIL: a bot listing was inserted without publish_bot';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  BEGIN
+    UPDATE public_bots SET name = 'Hijacked' WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: a bot listing was updated directly';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  -- And not through the function either. Unlike a server listing there is no
+  -- squatting to prevent here, but somebody else's row is still somebody
+  -- else's.
+  BEGIN
+    PERFORM publish_bot(v_id, 'Hijacked', 'https://evil.example/x', NULL, NULL,
+                        '{}', NULL, TRUE);
+    RAISE EXCEPTION 'FAIL: an account edited someone else''s bot listing';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'listing_not_yours' THEN RAISE; END IF;
+  END;
+
+  -- Deleting is a plain policy-checked write, and the policy is own-row.
+  DELETE FROM public_bots WHERE id = v_id;
+  IF NOT EXISTS (SELECT 1 FROM public_bots WHERE id = v_id) THEN
+    RAISE EXCEPTION 'FAIL: an account withdrew someone else''s bot listing';
+  END IF;
+
+  -- Two people may list a bot of the same name. The uniqueness is per
+  -- account, on purpose: the alternative locks an author out of their own
+  -- work because somebody got there first, which is the failure the server
+  -- directory needs a listing token to avoid.
+  PERFORM publish_bot(NULL, 'Dicebot 2', 'https://elsewhere.example/dice',
+                      NULL, NULL, '{}', NULL, TRUE);
+  IF (SELECT count(*) FROM public_bots WHERE name = 'Dicebot 2') <> 2 THEN
+    RAISE EXCEPTION 'FAIL: two accounts cannot list a bot of the same name';
+  END IF;
+
+  -- The same account, twice, is the case that is refused.
+  BEGIN
+    PERFORM publish_bot(NULL, 'Dicebot 2', 'https://elsewhere.example/again',
+                        NULL, NULL, '{}', NULL, TRUE);
+    RAISE EXCEPTION 'FAIL: one account listed the same bot name twice';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  RAISE NOTICE 'ok  a bot listing is public to read, and only its author can change it';
+END $$;
+
+-- ---------- likes ----------
+
+DO $$
+DECLARE
+  v_alice UUID;
+  v_bob   UUID;
+BEGIN
+  SELECT id INTO v_alice FROM public_bots
+   WHERE name = 'Dicebot 2' AND owner_id = 'cccc0000-0000-4000-8000-000000000001';
+  SELECT id INTO v_bob FROM public_bots
+   WHERE name = 'Dicebot 2' AND owner_id = 'cccc0000-0000-4000-8000-000000000002';
+
+  INSERT INTO bot_likes (bot_id, user_id) VALUES (v_alice, auth.uid());
+  IF (SELECT like_count FROM public_bots WHERE id = v_alice) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: liking did not move the count';
+  END IF;
+
+  -- The count is a trigger's, not a writer's: there is no UPDATE grant, so
+  -- the one column somebody else moves cannot be moved by hand.
+  BEGIN
+    UPDATE public_bots SET like_count = 9999 WHERE id = v_alice;
+    RAISE EXCEPTION 'FAIL: a like count was written directly';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  -- Liking twice is a duplicate key rather than two votes.
+  BEGIN
+    INSERT INTO bot_likes (bot_id, user_id) VALUES (v_alice, auth.uid());
+    RAISE EXCEPTION 'FAIL: the same account liked a bot twice';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+
+  -- And a like cast in somebody else's name is stamped back to the caller,
+  -- so it is still one vote and still theirs.
+  INSERT INTO bot_likes (bot_id, user_id)
+  VALUES (v_bob, 'cccc0000-0000-4000-8000-000000000001');
+  IF NOT EXISTS (SELECT 1 FROM bot_likes
+                  WHERE bot_id = v_bob AND user_id = auth.uid()) THEN
+    RAISE EXCEPTION 'FAIL: a like was not stamped with the caller';
+  END IF;
+  DELETE FROM bot_likes WHERE bot_id = v_bob;
+
+  -- Unliking is the whole of the dispute process.
+  DELETE FROM bot_likes WHERE bot_id = v_alice AND user_id = auth.uid();
+  IF (SELECT like_count FROM public_bots WHERE id = v_alice) <> 0 THEN
+    RAISE EXCEPTION 'FAIL: unliking did not move the count back';
+  END IF;
+
+  INSERT INTO bot_likes (bot_id, user_id) VALUES (v_alice, auth.uid());
+  RAISE NOTICE 'ok  a like counts once, is the caller''s, and is undone by deleting it';
+END $$;
+
+DO $$
+DECLARE v_first UUID;
+BEGIN
+  -- The browser's default order, which is the reason the count is a column
+  -- and not a subquery.
+  SELECT id INTO v_first FROM public_bots
+   WHERE is_listed ORDER BY like_count DESC, created_at DESC LIMIT 1;
+  IF v_first <> (SELECT id FROM public_bots
+                  WHERE name = 'Dicebot 2'
+                    AND owner_id = 'cccc0000-0000-4000-8000-000000000001') THEN
+    RAISE EXCEPTION 'FAIL: the best-liked bot is not first';
+  END IF;
+
+  -- A delisted bot keeps its likes and stays out of the browse either way.
+  IF EXISTS (SELECT 1 FROM public_bots WHERE is_listed AND name = 'Hidden') THEN
+    RAISE EXCEPTION 'FAIL: a delisted bot appeared in the browse order';
+  END IF;
+  RAISE NOTICE 'ok  the directory orders on likes, and delisting takes a bot out of it';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000003","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  -- Carol has an auth row and never claimed a handle.
+  BEGIN
+    PERFORM publish_bot(NULL, 'Carols bot', 'https://example.com/c', NULL,
+                        NULL, '{}', NULL, TRUE);
+    RAISE EXCEPTION 'FAIL: an account with no profile listed a bot';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'owner_has_no_profile' THEN RAISE; END IF;
+  END;
+
+  -- And cannot vote either: `bot_likes.user_id` references `users`, not
+  -- `auth.users`, so a bare sign-up is not a like. It is a low bar — the same
+  -- one publishing meets — and it is the only one the directory has.
+  BEGIN
+    INSERT INTO bot_likes (bot_id, user_id)
+    VALUES ((SELECT id FROM public_bots WHERE is_listed LIMIT 1), auth.uid());
+    RAISE EXCEPTION 'FAIL: an account with no profile liked a bot';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+  RAISE NOTICE 'ok  listing and liking both need a claimed handle';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE
+  i     INTEGER;
+  v_own INTEGER;
+BEGIN
+  SELECT count(*) INTO v_own FROM public_bots WHERE owner_id = auth.uid();
+  FOR i IN v_own + 1..max_public_bots() LOOP
+    PERFORM publish_bot(NULL, 'Bot ' || i, 'https://example.com/' || i,
+                        NULL, NULL, '{}', NULL, TRUE);
+  END LOOP;
+
+  BEGIN
+    PERFORM publish_bot(NULL, 'One too many', 'https://example.com/over',
+                        NULL, NULL, '{}', NULL, TRUE);
+    RAISE EXCEPTION 'FAIL: an account listed more bots than the cap allows';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'listing_cap_reached' THEN RAISE; END IF;
+  END;
+
+  -- The cap counts listings, not saves: an author at ten must still be able
+  -- to fix a typo.
+  PERFORM publish_bot((SELECT id FROM public_bots
+                        WHERE owner_id = auth.uid() AND name = 'Bot ' || max_public_bots()),
+                      'Bot renamed', 'https://example.com/renamed',
+                      NULL, NULL, '{}', NULL, TRUE);
+
+  -- Withdrawing a listing takes its likes with it, rather than leaving rows
+  -- pointing at a bot that is gone.
+  DELETE FROM public_bots WHERE owner_id = auth.uid() AND name = 'Bot renamed';
+  RAISE NOTICE 'ok  the per-account cap bounds new bot listings without freezing old ones';
+END $$;
+
+DO $$
+DECLARE v_bot UUID;
+BEGIN
+  SELECT id INTO v_bot FROM public_bots
+   WHERE name = 'Dicebot 2' AND owner_id = auth.uid();
+  DELETE FROM public_bots WHERE id = v_bot;
+  IF EXISTS (SELECT 1 FROM bot_likes WHERE bot_id = v_bot) THEN
+    RAISE EXCEPTION 'FAIL: withdrawing a listing left its likes behind';
+  END IF;
+  RAISE NOTICE 'ok  withdrawing a bot listing takes its likes with it';
+END $$;
+
+-- ============================================================
 -- 8. Friends, requests and blocks
 -- ============================================================
 -- The gate added in 012. Its one sentence is "you cannot send anything to

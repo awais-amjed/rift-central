@@ -111,6 +111,73 @@ REVOKE ALL ON FUNCTION publish_server(TEXT, UUID, TEXT, TEXT, TEXT, TEXT,
 -- being refused.
 GRANT EXECUTE ON FUNCTION max_public_servers() TO authenticated;
 
+-- ============================================================
+-- The bot directory
+-- ============================================================
+-- Read by everyone signed in, written only by whoever published it — the same
+-- shape as `public_servers`, with one difference that matters: `publish_bot`
+-- **is** granted to `authenticated`.
+--
+-- That is not an oversight and it is not a weaker rule. `publish_server` was
+-- taken away because central could not tell an admin from any member, and the
+-- listing it writes reserves a (host, server) pair the real admin then cannot
+-- have. A bot listing reserves nothing, points at no database, and carries no
+-- authority — the worst a false one does is describe a program that isn't
+-- there, next to a source URL anybody can read. There is nothing here a round
+-- trip could verify.
+
+REVOKE ALL ON public_bots FROM anon, authenticated;
+
+GRANT SELECT, DELETE ON public_bots TO authenticated;
+
+CREATE POLICY public_bots_select ON public_bots FOR SELECT TO authenticated
+  USING (is_listed OR owner_id = auth.uid());
+
+CREATE POLICY public_bots_delete_own ON public_bots FOR DELETE TO authenticated
+  USING (owner_id = auth.uid());
+
+-- No UPDATE grant: `publish_bot` is the only way a listing changes, which is
+-- what makes the per-account cap unavoidable. The one column somebody else
+-- moves is `like_count`, and that is a trigger's doing, not a write anyone is
+-- allowed to make.
+
+REVOKE ALL ON FUNCTION max_public_bots() FROM PUBLIC, anon, authenticated;
+
+REVOKE ALL ON FUNCTION publish_bot(UUID, TEXT, TEXT, TEXT, TEXT, TEXT[], JSONB,
+                                   BOOLEAN)
+  FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION publish_bot(UUID, TEXT, TEXT, TEXT, TEXT, TEXT[], JSONB,
+                                      BOOLEAN)
+  TO authenticated;
+
+-- Same reasoning as max_public_servers(): the cap is the whole answer, so the
+-- dialog can say "9 of 10" rather than find out by being refused.
+GRANT EXECUTE ON FUNCTION max_public_bots() TO authenticated;
+
+-- ---------- likes ----------
+-- A like is public — the count is the ranking, and a count nobody may check
+-- is a number the directory is asking to be trusted on. So the rows are
+-- readable by everyone signed in, and writable only as your own.
+--
+-- INSERT and DELETE rather than an RPC: there is no cap to enforce and no
+-- decision to make. The primary key is (bot_id, user_id), so liking twice is
+-- a duplicate-key error rather than two votes, and the trigger recounts from
+-- the table either way.
+
+REVOKE ALL ON bot_likes FROM anon, authenticated;
+
+GRANT SELECT, INSERT, DELETE ON bot_likes TO authenticated;
+
+CREATE POLICY bot_likes_select ON bot_likes FOR SELECT TO authenticated
+  USING (TRUE);
+
+CREATE POLICY bot_likes_insert_own ON bot_likes FOR INSERT TO authenticated
+  WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY bot_likes_delete_own ON bot_likes FOR DELETE TO authenticated
+  USING (user_id = auth.uid());
+
 CREATE POLICY device_tokens_own ON device_tokens FOR ALL TO authenticated
   USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 
@@ -359,6 +426,10 @@ ALTER TABLE dm_messages          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE read_state           ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public_servers ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public_bots ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE bot_likes   ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE device_tokens ENABLE ROW LEVEL SECURITY;
 

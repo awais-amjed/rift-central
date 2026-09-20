@@ -214,6 +214,139 @@ CREATE INDEX IF NOT EXISTS idx_public_servers_tags ON public_servers USING GIN (
 CREATE INDEX IF NOT EXISTS idx_public_servers_owner ON public_servers (owner_id);
 
 -- ============================================================
+-- The public bot directory
+-- ============================================================
+-- Bots existed before anyone could find one. A bot is a user whose seed lives
+-- in a config file, it joins through an invite marked `is_bot`, and the whole
+-- of "installing" it was being handed that invite by somebody who already knew
+-- the bot was there. There was no list.
+--
+-- So: the same directory argument as `public_servers`, one table over. Central
+-- is the only place a bot author and a server admin already share, a listing
+-- is an advertisement, and publishing is opt-in and reversible.
+--
+-- **What a bot listing is not.** A server listing points at a running server
+-- and carries the invite that joins it — central hands out an address. A bot
+-- has no address: it runs wherever its author runs it, and the invite has to
+-- travel the other way, minted on *your* server and handed to the program. A
+-- bot listing is therefore a catalogue entry — a name, what it does, and where
+-- the code is — and adding one is the admin's own server minting a bot invite.
+-- Central never touches the server, and there is nothing here for it to
+-- verify.
+--
+-- **Which is why there is no squatting rule and no proof-of-admin round trip,
+-- unlike `public_servers`.** That table's key is (supabase_url, server_id),
+-- which exists whether or not its owner has listed it, so the first claimant
+-- could lock the real admin out forever — hence the listing token. A bot
+-- listing keys on nothing outside this table. Two accounts listing a bot of
+-- the same name are two rows, both findable, distinguished by who published
+-- them and by `source_url`. The failure that rule prevents is the worse one:
+-- an author permanently unable to list their own work.
+
+CREATE TABLE IF NOT EXISTS public_bots (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- The account that published it. As with a server listing, deleting the
+  -- account withdraws the entry — nobody else can keep it accurate.
+  owner_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+  name         TEXT        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 64),
+  description  TEXT                 CHECK (length(description) <= 300),
+  icon_url     TEXT                 CHECK (length(icon_url) <= 500),
+
+  -- Where the code is: the one line of provenance a stranger gets, and the
+  -- only way to answer "what am I about to run?". Central checks that it is an
+  -- https URL and nothing else — it never fetches this, so unlike
+  -- `public_servers.supabase_url` the scheme is a formatting question rather
+  -- than a security one. Required, because a bot nobody can read is a bot
+  -- nobody should install.
+  source_url   TEXT        NOT NULL CHECK (source_url ~ '^https://[^ ]+$'
+                                           AND length(source_url) <= 200),
+
+  -- The same tag rule as a server listing, deliberately: one vocabulary across
+  -- the directory, and one validator in the client.
+  tags         TEXT[]      NOT NULL DEFAULT '{}'
+                           CHECK (cardinality(tags) <= 5
+                                  AND array_to_string(tags, ',') ~
+                                      '^([a-z0-9-]{2,20}(,[a-z0-9-]{2,20})*)?$'),
+
+  -- The author's copy of what a running instance publishes on `users.manifest`
+  -- — the command list and the data-use sentence (BOTS.md §4, §8). Kept here
+  -- so the browser can say what a bot does *before* it is installed, which is
+  -- the one moment the question matters and the one moment there is no
+  -- instance to ask. Same 8 KB ceiling as the column it mirrors: a manifest is
+  -- a short list of verbs, not a payload.
+  manifest     JSONB                CHECK (manifest IS NULL
+                                           OR length(manifest::text) <= 8192),
+
+  -- Delisting keeps the row and its likes while taking it out of the browser,
+  -- exactly as it does for a server.
+  is_listed    BOOLEAN     NOT NULL DEFAULT TRUE,
+
+  -- Denormalised from `bot_likes`, maintained by trigger (003). Ordering is
+  -- the whole point of the count, and `ORDER BY (SELECT count(*) ...)` cannot
+  -- use an index — every browse would count every like of every bot.
+  like_count   INTEGER     NOT NULL DEFAULT 0 CHECK (like_count >= 0),
+
+  -- Per account, not global. An author may not list the same bot twice by
+  -- accident; two authors may both list a "dicebot", and nothing about that is
+  -- a collision worth refusing.
+  UNIQUE (owner_id, name)
+);
+
+-- The default browse: listed, best-liked first. `created_at` breaks the tie
+-- rather than `updated_at`, so an author cannot lift an old bot up the page by
+-- editing its description.
+CREATE INDEX IF NOT EXISTS idx_public_bots_top
+  ON public_bots (is_listed, like_count DESC, created_at DESC);
+
+-- The other order the browser offers, and the one that gives a bot with no
+-- likes yet somewhere to be seen.
+CREATE INDEX IF NOT EXISTS idx_public_bots_new
+  ON public_bots (is_listed, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_public_bots_tags ON public_bots USING GIN (tags);
+
+CREATE INDEX IF NOT EXISTS idx_public_bots_owner ON public_bots (owner_id);
+
+-- ---------- likes ----------
+-- One bit per account per bot, and the only ranking signal the directory has.
+--
+-- **Why a like and not a rating.** A five-star average needs volume before it
+-- means anything — one 5.0 outranks two hundred 4.6s — and fixing that takes a
+-- smoothed posterior, which is a lot of machinery for a directory whose honest
+-- answer at this size is "these are the ones people kept". A like is also the
+-- only signal that cannot be argued with: it has no scale to interpret, no
+-- review text to moderate, and unliking is the whole of the dispute process.
+-- The thing a rating would measure better — does this bot work — is not
+-- something central can see anyway, since it never touches the server the bot
+-- runs on.
+--
+-- Installs would be the better signal and cannot be counted: adding a bot is
+-- an invite minted on somebody's own server, which central never hears about.
+-- That is the same trade `public_servers.member_count` makes, and it is worth
+-- making the other way here — a self-reported install count would be a number
+-- the author chooses.
+--
+-- `user_id` references `users` rather than `auth.users`, so liking needs a
+-- claimed handle. It is a low bar and it is the same one publishing meets;
+-- what it stops is a bare sign-up being a vote.
+
+CREATE TABLE IF NOT EXISTS bot_likes (
+  bot_id     UUID        NOT NULL REFERENCES public_bots(id) ON DELETE CASCADE,
+  user_id    UUID        NOT NULL REFERENCES users(id)       ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  PRIMARY KEY (bot_id, user_id)
+);
+
+-- "Which of these have I liked" for the page on screen — the primary key is
+-- the wrong way round for that.
+CREATE INDEX IF NOT EXISTS idx_bot_likes_user ON bot_likes (user_id);
+
+-- ============================================================
 -- Push notifications
 -- ============================================================
 -- Local notifications only fire while the process is alive. On Android that

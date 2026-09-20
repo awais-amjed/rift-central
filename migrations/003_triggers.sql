@@ -180,6 +180,44 @@ BEGIN
   RETURN NULL;
 END $$;
 
+-- ---------- the like count ----------
+-- `public_bots.like_count` is `bot_likes` counted, kept in step here rather
+-- than read on every browse: the directory's default order *is* this number,
+-- and `ORDER BY (SELECT count(*) …)` cannot use an index.
+--
+-- SECURITY DEFINER because the person liking has no UPDATE grant on
+-- `public_bots` — the whole point is that a listing is written by its owner
+-- and by nobody else. Liking is the one thing anybody may change about
+-- somebody else's row, and this is the only path that changes it.
+--
+-- Recounted from the table rather than incremented. A delta is one lost or
+-- replayed statement away from a count that nothing will ever correct, and
+-- there is no cheap way to notice; the subquery is a primary-key range scan
+-- on rows for one bot.
+CREATE OR REPLACE FUNCTION recount_bot_likes() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_bot UUID := COALESCE(NEW.bot_id, OLD.bot_id);
+BEGIN
+  UPDATE public_bots
+     SET like_count = (SELECT count(*) FROM bot_likes WHERE bot_id = v_bot)
+   WHERE id = v_bot;
+  RETURN NULL;
+END; $$;
+
+-- A like is the caller's, whatever the insert said. The policy says the same
+-- thing, and both are cheap; this is the one that survives the policy being
+-- rewritten.
+CREATE OR REPLACE FUNCTION stamp_bot_like() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL THEN
+    NEW.user_id := auth.uid();
+  END IF;
+  NEW.created_at := now();
+  RETURN NEW;
+END; $$;
+
 CREATE TRIGGER attest_dm_messages BEFORE INSERT OR UPDATE ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION attest_dm();
 
@@ -197,3 +235,9 @@ CREATE TRIGGER dm_messages_head AFTER INSERT ON dm_messages
 
 CREATE TRIGGER dm_messages_head_gone AFTER DELETE ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION forget_dm_head();
+
+CREATE TRIGGER bot_likes_stamp BEFORE INSERT ON bot_likes
+  FOR EACH ROW EXECUTE FUNCTION stamp_bot_like();
+
+CREATE TRIGGER bot_likes_recount AFTER INSERT OR DELETE ON bot_likes
+  FOR EACH ROW EXECUTE FUNCTION recount_bot_likes();

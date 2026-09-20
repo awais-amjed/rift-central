@@ -179,6 +179,94 @@ BEGIN
   RETURN v_row;
 END; $$;
 
+-- ---------- listing a bot ----------
+-- How many bots one account may list. Same argument as max_public_servers():
+-- not a storage bound, a bound on how much of a directory one account can be.
+
+CREATE OR REPLACE FUNCTION max_public_bots() RETURNS INTEGER
+  LANGUAGE sql IMMUTABLE AS $$ SELECT 10 $$;
+
+-- Create or update your own bot listing.
+--
+-- Unlike `publish_server`, this is reachable by `authenticated` and needs no
+-- proof of anything. There is nothing to prove: a bot listing points at no
+-- database central could ask, and it holds no slot anyone else could be
+-- locked out of — see the table's own note in 001. The rules it does enforce
+-- are its own: you must have a profile, you own what you publish, and ten is
+-- the ceiling.
+--
+-- SECURITY DEFINER for the same reason `publish_server` is: there is no
+-- INSERT or UPDATE grant on the table, so this function is the only way a row
+-- is written and the cap cannot be gone around by writing one directly.
+-- `owner_id` comes from auth.uid() and never from an argument.
+--
+-- [p_id] null creates; anything else edits that row, which must be yours.
+-- Editing by id rather than upserting on (owner_id, name) is what lets a bot
+-- be renamed — an upsert on the name would quietly leave the old listing
+-- behind and spend another slot.
+CREATE OR REPLACE FUNCTION publish_bot(
+  p_id          UUID    DEFAULT NULL,
+  p_name        TEXT    DEFAULT NULL,
+  p_source_url  TEXT    DEFAULT NULL,
+  p_description TEXT    DEFAULT NULL,
+  p_icon_url    TEXT    DEFAULT NULL,
+  p_tags        TEXT[]  DEFAULT '{}',
+  p_manifest    JSONB   DEFAULT NULL,
+  p_is_listed   BOOLEAN DEFAULT TRUE
+) RETURNS public_bots
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_count INTEGER;
+  v_row   public_bots;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'not_authenticated';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = auth.uid()) THEN
+    RAISE EXCEPTION 'owner_has_no_profile';
+  END IF;
+
+  IF p_id IS NULL THEN
+    SELECT count(*) INTO v_count FROM public_bots WHERE owner_id = auth.uid();
+    IF v_count >= max_public_bots() THEN
+      RAISE EXCEPTION 'listing_cap_reached';
+    END IF;
+
+    INSERT INTO public_bots (owner_id, name, description, icon_url,
+                             source_url, tags, manifest, is_listed)
+         VALUES (auth.uid(), btrim(p_name), p_description, p_icon_url,
+                 p_source_url, COALESCE(p_tags, '{}'), p_manifest,
+                 COALESCE(p_is_listed, TRUE))
+      RETURNING * INTO v_row;
+    RETURN v_row;
+  END IF;
+
+  -- `owner_id` in the predicate rather than a separate check: the row is
+  -- readable by everyone, so a WHERE that matched it and then refused would
+  -- be a slower way to say the same thing.
+  UPDATE public_bots
+     SET name        = btrim(p_name),
+         description = p_description,
+         icon_url    = p_icon_url,
+         source_url  = p_source_url,
+         tags        = COALESCE(p_tags, '{}'),
+         manifest    = p_manifest,
+         is_listed   = COALESCE(p_is_listed, TRUE),
+         updated_at  = now()
+   WHERE id = p_id AND owner_id = auth.uid()
+   RETURNING * INTO v_row;
+
+  IF v_row.id IS NULL THEN
+    RAISE EXCEPTION 'listing_not_yours';
+  END IF;
+  RETURN v_row;
+END; $$;
+
+COMMENT ON FUNCTION publish_bot(UUID, TEXT, TEXT, TEXT, TEXT, TEXT[], JSONB, BOOLEAN) IS
+  'Create or edit the caller''s own bot listing. Unlike publish_server this '
+  'needs no proof-of-admin round trip, because a bot listing names no server '
+  'and reserves nothing anyone else could want — see public_bots in 001.';
+
 -- ---------- enrolling ----------
 -- The one moment the secret exists outside this table. The caller is the
 -- server's admin, signed in to central; their client writes what comes back
