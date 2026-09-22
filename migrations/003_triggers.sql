@@ -218,26 +218,34 @@ BEGIN
   RETURN NEW;
 END; $$;
 
+DROP TRIGGER IF EXISTS attest_dm_messages ON dm_messages;
 CREATE TRIGGER attest_dm_messages BEFORE INSERT OR UPDATE ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION attest_dm();
 
+DROP TRIGGER IF EXISTS device_tokens_stamp ON device_tokens;
 CREATE TRIGGER device_tokens_stamp BEFORE INSERT OR UPDATE ON device_tokens
   FOR EACH ROW EXECUTE FUNCTION stamp_device_owner();
 
+DROP TRIGGER IF EXISTS dm_messages_ring ON dm_messages;
 CREATE TRIGGER dm_messages_ring AFTER INSERT ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION ring_recipient();
 
+DROP TRIGGER IF EXISTS notification_prefs_stamp ON notification_prefs;
 CREATE TRIGGER notification_prefs_stamp BEFORE INSERT OR UPDATE ON notification_prefs
   FOR EACH ROW EXECUTE FUNCTION stamp_notification_pref();
 
+DROP TRIGGER IF EXISTS dm_messages_head ON dm_messages;
 CREATE TRIGGER dm_messages_head AFTER INSERT ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION remember_dm_head();
 
+DROP TRIGGER IF EXISTS dm_messages_head_gone ON dm_messages;
 CREATE TRIGGER dm_messages_head_gone AFTER DELETE ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION forget_dm_head();
 
+DROP TRIGGER IF EXISTS bot_likes_stamp ON bot_likes;
 CREATE TRIGGER bot_likes_stamp BEFORE INSERT ON bot_likes
   FOR EACH ROW EXECUTE FUNCTION stamp_bot_like();
 
+DROP TRIGGER IF EXISTS bot_likes_recount ON bot_likes;
 CREATE TRIGGER bot_likes_recount AFTER INSERT OR DELETE ON bot_likes
   FOR EACH ROW EXECUTE FUNCTION recount_bot_likes();

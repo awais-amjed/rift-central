@@ -120,18 +120,22 @@ BEGIN
     USING (can_join_topic(realtime.topic()));
 END $$;
 
+DROP TRIGGER IF EXISTS dm_messages_announce ON dm_messages;
 CREATE TRIGGER dm_messages_announce
   AFTER INSERT OR UPDATE OR DELETE ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION announce_dm();
 
+DROP TRIGGER IF EXISTS notification_prefs_announce ON notification_prefs;
 CREATE TRIGGER notification_prefs_announce
   AFTER INSERT OR UPDATE OR DELETE ON notification_prefs
   FOR EACH ROW EXECUTE FUNCTION announce_prefs();
 
+DROP TRIGGER IF EXISTS friendships_announce ON friendships;
 CREATE TRIGGER friendships_announce
   AFTER INSERT OR UPDATE OR DELETE ON friendships
   FOR EACH ROW EXECUTE FUNCTION announce_friendship();
 
+DROP TRIGGER IF EXISTS blocks_announce ON blocks;
 CREATE TRIGGER blocks_announce
   AFTER INSERT OR UPDATE OR DELETE ON blocks
   FOR EACH ROW EXECUTE FUNCTION announce_block();

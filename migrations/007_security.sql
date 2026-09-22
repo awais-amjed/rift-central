@@ -47,21 +47,27 @@ GRANT SELECT, INSERT ON read_state TO authenticated;
 
 GRANT UPDATE (last_read_id, updated_at) ON read_state TO authenticated;
 
+DROP POLICY IF EXISTS users_insert_self ON users;
 CREATE POLICY users_insert_self ON users FOR INSERT TO authenticated
   WITH CHECK (id = auth.uid());
 
+DROP POLICY IF EXISTS users_update_self ON users;
 CREATE POLICY users_update_self ON users FOR UPDATE TO authenticated
   USING (id = auth.uid()) WITH CHECK (id = auth.uid());
 
+DROP POLICY IF EXISTS dm_messages_select ON dm_messages;
 CREATE POLICY dm_messages_select ON dm_messages FOR SELECT TO authenticated
   USING (auth.uid() IN (sender_id, recipient_id));
 
+DROP POLICY IF EXISTS dm_messages_update_own ON dm_messages;
 CREATE POLICY dm_messages_update_own ON dm_messages FOR UPDATE TO authenticated
   USING (sender_id = auth.uid()) WITH CHECK (sender_id = auth.uid());
 
+DROP POLICY IF EXISTS dm_messages_delete_own ON dm_messages;
 CREATE POLICY dm_messages_delete_own ON dm_messages FOR DELETE TO authenticated
   USING (sender_id = auth.uid());
 
+DROP POLICY IF EXISTS read_state_own ON read_state;
 CREATE POLICY read_state_own ON read_state FOR ALL TO authenticated
   USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 
@@ -88,9 +94,11 @@ REVOKE ALL ON public_servers FROM anon, authenticated;
 
 GRANT SELECT, DELETE ON public_servers TO authenticated;
 
+DROP POLICY IF EXISTS public_servers_select ON public_servers;
 CREATE POLICY public_servers_select ON public_servers FOR SELECT TO authenticated
   USING (is_listed OR owner_id = auth.uid());
 
+DROP POLICY IF EXISTS public_servers_delete_own ON public_servers;
 CREATE POLICY public_servers_delete_own ON public_servers FOR DELETE TO authenticated
   USING (owner_id = auth.uid());
 
@@ -130,9 +138,11 @@ REVOKE ALL ON public_bots FROM anon, authenticated;
 
 GRANT SELECT, DELETE ON public_bots TO authenticated;
 
+DROP POLICY IF EXISTS public_bots_select ON public_bots;
 CREATE POLICY public_bots_select ON public_bots FOR SELECT TO authenticated
   USING (is_listed OR owner_id = auth.uid());
 
+DROP POLICY IF EXISTS public_bots_delete_own ON public_bots;
 CREATE POLICY public_bots_delete_own ON public_bots FOR DELETE TO authenticated
   USING (owner_id = auth.uid());
 
@@ -169,15 +179,19 @@ REVOKE ALL ON bot_likes FROM anon, authenticated;
 
 GRANT SELECT, INSERT, DELETE ON bot_likes TO authenticated;
 
+DROP POLICY IF EXISTS bot_likes_select ON bot_likes;
 CREATE POLICY bot_likes_select ON bot_likes FOR SELECT TO authenticated
   USING (TRUE);
 
+DROP POLICY IF EXISTS bot_likes_insert_own ON bot_likes;
 CREATE POLICY bot_likes_insert_own ON bot_likes FOR INSERT TO authenticated
   WITH CHECK (user_id = auth.uid());
 
+DROP POLICY IF EXISTS bot_likes_delete_own ON bot_likes;
 CREATE POLICY bot_likes_delete_own ON bot_likes FOR DELETE TO authenticated
   USING (user_id = auth.uid());
 
+DROP POLICY IF EXISTS device_tokens_own ON device_tokens;
 CREATE POLICY device_tokens_own ON device_tokens FOR ALL TO authenticated
   USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 
@@ -187,9 +201,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON device_tokens TO authenticated;
 
 REVOKE ALL ON push_config FROM anon, authenticated;
 
+DROP POLICY IF EXISTS push_relays_own_read ON push_relays;
 CREATE POLICY push_relays_own_read ON push_relays FOR SELECT TO authenticated
   USING (owner_id = auth.uid());
 
+DROP POLICY IF EXISTS push_relays_own_delete ON push_relays;
 CREATE POLICY push_relays_own_delete ON push_relays FOR DELETE TO authenticated
   USING (owner_id = auth.uid());
 
@@ -208,6 +224,7 @@ GRANT EXECUTE ON FUNCTION enroll_push_relay(TEXT, UUID, TEXT) TO authenticated;
 -- has no business spending it directly.
 REVOKE ALL ON FUNCTION claim_relay_push(UUID, TEXT, INTEGER) FROM public, anon, authenticated;
 
+DROP POLICY IF EXISTS notification_prefs_own ON notification_prefs;
 CREATE POLICY notification_prefs_own ON notification_prefs FOR ALL TO authenticated
   USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 
@@ -243,12 +260,15 @@ GRANT SELECT ON friendships TO authenticated;
 
 GRANT SELECT ON blocks      TO authenticated;
 
+DROP POLICY IF EXISTS friendships_select_own ON friendships;
 CREATE POLICY friendships_select_own ON friendships FOR SELECT TO authenticated
   USING (auth.uid() IN (low_id, high_id));
 
+DROP POLICY IF EXISTS blocks_select_own ON blocks;
 CREATE POLICY blocks_select_own ON blocks FOR SELECT TO authenticated
   USING (blocker_id = auth.uid());
 
+DROP POLICY IF EXISTS users_select_directory ON users;
 CREATE POLICY users_select_directory ON users FOR SELECT TO authenticated
   USING (id = auth.uid() OR knows_user(id));
 
