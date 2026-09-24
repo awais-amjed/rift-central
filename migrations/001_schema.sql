@@ -341,6 +341,42 @@ CREATE INDEX IF NOT EXISTS idx_public_bots_tags ON public_bots USING GIN (tags);
 
 CREATE INDEX IF NOT EXISTS idx_public_bots_owner ON public_bots (owner_id);
 
+-- ---------- and the same rule on a table that already exists ----------
+-- Both listing tables are `CREATE TABLE IF NOT EXISTS`, which on a database
+-- that has them is skipped whole — column definitions, CHECK constraints and
+-- all. So tightening `icon_url` above reaches a fresh database and silently
+-- does nothing to a deployed one: the file says https, the table still says
+-- any 500 characters, re-applying reports no error, and nothing anywhere
+-- says the two disagree.
+--
+-- That is the gap this block closes, and it is the same reappliability every
+-- policy and trigger in 003-007 was given: state the constraint rather than
+-- assume the CREATE put it there.
+--
+-- An icon that does not meet the rule becomes NULL rather than failing the
+-- migration. A listing with no icon draws its initial, which is what an
+-- unreachable icon already did, and refusing to apply the schema over a
+-- cosmetic column would be a worse answer than dropping the value that was
+-- the problem in the first place.
+DO $$
+DECLARE v_spelling TEXT :=
+  'icon_url ~ ''^https://[^ ]+$'' AND length(icon_url) <= 500';
+BEGIN
+  UPDATE public_bots    SET icon_url = NULL
+   WHERE icon_url IS NOT NULL AND icon_url !~ '^https://[^ ]+$';
+  UPDATE public_servers SET icon_url = NULL
+   WHERE icon_url IS NOT NULL AND icon_url !~ '^https://[^ ]+$';
+
+  -- Named exactly as Postgres names an inline column CHECK, so a database
+  -- built from scratch and one upgraded here end up indistinguishable.
+  ALTER TABLE public_bots    DROP CONSTRAINT IF EXISTS public_bots_icon_url_check;
+  EXECUTE 'ALTER TABLE public_bots ADD CONSTRAINT public_bots_icon_url_check CHECK ('
+          || v_spelling || ')';
+  ALTER TABLE public_servers DROP CONSTRAINT IF EXISTS public_servers_icon_url_check;
+  EXECUTE 'ALTER TABLE public_servers ADD CONSTRAINT public_servers_icon_url_check CHECK ('
+          || v_spelling || ')';
+END $$;
+
 -- ---------- likes ----------
 -- One bit per account per bot, and the only ranking signal the directory has.
 --
