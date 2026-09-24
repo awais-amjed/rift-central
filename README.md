@@ -184,6 +184,96 @@ ordinary Deno HTTP handlers and need no Supabase runtime; `relay/server.mjs`
 already runs one of them on plain Node. SES and the Firebase credentials are
 external either way and do not move.
 
+## Where central goes when it leaves
+
+Decided 24 September 2026, before the first real user, which is the only
+reason it is cheap to decide at all. **Leaseweb VPS 1 — €4.99/month, Frankfurt
+or Amsterdam, monthly billing.** 4 vCPU, 6 GB RAM, 100 GB local NVMe, 30 TB
+traffic.
+
+The shape of the argument matters more than the provider, because the provider
+will change and the reasoning will not.
+
+**Why not stay managed.** Free covers central today — it is 14 MB and a
+handful of accounts. The moment it needs a name of its own it needs Pro plus
+the Custom Domain add-on, which is $35/month to solve a problem a VPS solves
+by having a DNS record. Moving before there are installs pinned to
+`<ref>.supabase.co` means the hostname question never has to be paid for at
+all. That is the whole timing argument: this is cheap now and expensive later,
+and nothing about it gets better by waiting.
+
+**Why not AWS.** Four to six times the price for the same box — Lightsail's
+8 GB bundle is $44, an equivalent EC2 instance with its disk is around $55 —
+and egress is metered at roughly $0.09/GB where a VPS includes tens of
+terabytes. For a service that ships attachments and vault backups, a terabyte
+of egress a month would cost more than the machine. Getting EC2 near VPS money
+needs a one-to-three-year commitment, which is the opposite of starting small.
+The one real argument for AWS is that SES already lives there, and one bill is
+worth something — just not $35 a month at this size.
+
+**Why not Hetzner, which would otherwise have won.** It is the only provider
+found that lets CPU and RAM scale *reversibly* (rescale with the disk left
+alone) and grows storage independently through Volumes. It is also, as of
+September 2026, unbuyable: the entire CX and CAX line reads "not available",
+Hetzner's own status page carries a standing *Limited availability of Cloud
+plans* incident, and new customers are restricted from creating cloud servers
+at all. A product that cannot be ordered is not a choice.
+
+**Why not Contabo.** Against VPS 1 it is *more* expensive (~€6.20), on SATA
+SSD rather than NVMe, behind a 200 Mbit port, and operationally wobblier —
+independent uptime testing lands under its own advertised figure, and its
+Object Storage cluster was degraded the day before this was written, which is
+the product the storage plan below depends on.
+
+**Why not Leaseweb's own Public Cloud**, which is the same company selling the
+parts separately — compute, network block storage and addresses billed and
+resized independently, hourly, with an API. It is the nicer shape and it costs
+considerably more for equivalent specs. It also puts the database's `fsync` on
+a network device instead of a local NVMe, which is the one latency a Postgres
+box actually feels.
+
+### What follows from this choice
+
+**Upgrades are one-way, so start at the bottom.** Neither Leaseweb nor Contabo
+supports a downgrade — the documented answer at both is "order a smaller one
+and migrate". Upgrading, though, is a button. When up is easy and down is
+impossible, buying headroom in advance is just paying early for a size you may
+never need. The trigger to move to VPS 2 (€8.99, 6 vCPU / 16 GB / 200 GB) is
+**concurrent connections into the low thousands**: Realtime costs 85–230 KB
+per socket, the stack idles around 1.5 GB, and 6 GB stops being comfortable
+somewhere in that range.
+
+**Disk now, object storage later, and never both.** `STORAGE_BACKEND` is one
+global setting — there is no per-bucket backend, so buckets cannot be split
+between a local disk and a bucket. The file backend writes objects at
+`<bucket>/<name>/<version>`, which is the S3 key layout on a local filesystem,
+so the migration is a sync of that tree plus an environment change; Postgres is
+untouched, because `storage.objects` is the authority either way. The one thing
+that does not survive a plain copy is the per-object metadata the file backend
+keeps in extended attributes — which for Rift is cosmetic, since every blob is
+ciphertext and image transformation is off. The consequence worth remembering:
+**storage growth never forces a machine upgrade**, because the escape hatch is
+a backend swap rather than a bigger disk.
+
+**The directory needs moderation before it is public, and that is now a
+hosting requirement rather than a product nicety.** Leaseweb's documented
+reflex on an abuse report is to null-route the address first. Central serves
+the public server directory — names, descriptions and icons, in plaintext,
+written by strangers — so one ugly listing is one report away from taking down
+the address that every client uses for accounts, DMs and backups. End-to-end
+encryption does not help here; it means nobody can verify the complaint is
+bogus either.
+
+**Backups leave the box.** A provider snapshot protects the disk, not the
+decision to keep everything on one machine. Central holds the account rows and
+the encrypted vault backups, and the migrations plus this README can rebuild
+everything except the data. An off-box `pg_dump` is what makes a null-route or
+a dead host an hour of work instead of a catastrophe.
+
+Prices here are September 2026 and this tier repriced at least twice during the
+year — Hetzner in June, Leaseweb in August, Netcup across its G12.5 line.
+Treat every figure above as needing a check rather than a quote.
+
 ## Bringing up a project from nothing
 
 The seven migration files are the schema and nothing else. A Supabase project
