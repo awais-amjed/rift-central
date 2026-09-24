@@ -180,7 +180,22 @@ CREATE TABLE IF NOT EXISTS public_servers (
 
   name         TEXT        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 64),
   description  TEXT                 CHECK (length(description) <= 300),
-  icon_url     TEXT                 CHECK (length(icon_url) <= 500),
+  -- The one URL in either listing that a client actually dereferences: the
+  -- directory draws it with `CachedNetworkImage` the moment the row is on
+  -- screen. So the scheme is a security question here, unlike `source_url`
+  -- below, which central checks for tidiness and nobody fetches.
+  --
+  -- https only, for the same reason `supabase_url` is: plain http would hand
+  -- every passive observer the list of communities somebody was browsing, and
+  -- a scheme that is not the web has no business reaching an image loader.
+  --
+  -- It does not close the larger hole, which is a decision rather than a bug:
+  -- the bytes still come from an address the *publisher* chose, so a listing
+  -- can count who opened the directory and when. That is the same tracking
+  -- `LinkPreview` exists to refuse, and closing it properly means hosting
+  -- these icons here rather than linking them.
+  icon_url     TEXT                 CHECK (icon_url ~ '^https://[^ ]+$'
+                                           AND length(icon_url) <= 500),
 
   -- Up to five lowercase slugs, which is the whole of the browser's filtering.
   -- A fixed category list would need a migration every time a community turns
@@ -254,7 +269,22 @@ CREATE TABLE IF NOT EXISTS public_bots (
 
   name         TEXT        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 64),
   description  TEXT                 CHECK (length(description) <= 300),
-  icon_url     TEXT                 CHECK (length(icon_url) <= 500),
+  -- The one URL in either listing that a client actually dereferences: the
+  -- directory draws it with `CachedNetworkImage` the moment the row is on
+  -- screen. So the scheme is a security question here, unlike `source_url`
+  -- below, which central checks for tidiness and nobody fetches.
+  --
+  -- https only, for the same reason `supabase_url` is: plain http would hand
+  -- every passive observer the list of communities somebody was browsing, and
+  -- a scheme that is not the web has no business reaching an image loader.
+  --
+  -- It does not close the larger hole, which is a decision rather than a bug:
+  -- the bytes still come from an address the *publisher* chose, so a listing
+  -- can count who opened the directory and when. That is the same tracking
+  -- `LinkPreview` exists to refuse, and closing it properly means hosting
+  -- these icons here rather than linking them.
+  icon_url     TEXT                 CHECK (icon_url ~ '^https://[^ ]+$'
+                                           AND length(icon_url) <= 500),
 
   -- Where the code is: the one line of provenance a stranger gets, and the
   -- only way to answer "what am I about to run?". Central checks that it is an
