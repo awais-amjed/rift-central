@@ -202,7 +202,7 @@ export function createRelay(config: RelayConfig) {
         }
       } else {
         // Central's own trigger, which names an account rather than a device.
-        if (secret !== config.pushSecret) {
+        if (!await sameSecret(secret, config.pushSecret)) {
           return new Response("forbidden", { status: 403 });
         }
         if (!recipient) return Response.json({ rang: 0 });
@@ -229,6 +229,31 @@ export function createRelay(config: RelayConfig) {
       return new Response(`error: ${err}`, { status: 500 });
     }
   };
+}
+
+/**
+ * Compare two secrets in time that does not depend on where they differ.
+ *
+ * The same shape `sweep_dm_attachments` and `create_server` use, and for the
+ * same reason — this one was a plain `!==`, which is the one secret comparison
+ * in either repository that told you how much of it you had right. Digesting
+ * first means the loop runs over a fixed 32 bytes whatever lengths went in, so
+ * the length does not leak either.
+ *
+ * No imports, like the rest of this file: `crypto.subtle` is in Deno, Node 18+
+ * and Workers alike.
+ */
+async function sameSecret(a: string, b: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [x, y] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(a)),
+    crypto.subtle.digest("SHA-256", encoder.encode(b)),
+  ]);
+  const left = new Uint8Array(x);
+  const right = new Uint8Array(y);
+  let difference = 0;
+  for (let i = 0; i < left.length; i++) difference |= left[i] ^ right[i];
+  return difference === 0;
 }
 
 /**
