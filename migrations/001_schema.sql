@@ -180,22 +180,21 @@ CREATE TABLE IF NOT EXISTS public_servers (
 
   name         TEXT        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 64),
   description  TEXT                 CHECK (length(description) <= 300),
-  -- The one URL in either listing that a client actually dereferences: the
-  -- directory draws it with `CachedNetworkImage` the moment the row is on
-  -- screen. So the scheme is a security question here, unlike `source_url`
-  -- below, which central checks for tidiness and nobody fetches.
+  -- An object in the `directory-icons` bucket (005), not an address.
   --
-  -- https only, for the same reason `supabase_url` is: plain http would hand
-  -- every passive observer the list of communities somebody was browsing, and
-  -- a scheme that is not the web has no business reaching an image loader.
+  -- This was `icon_url`, and the directory drew it with `CachedNetworkImage`
+  -- straight from wherever it pointed — which the publisher chose. So opening
+  -- the browser fetched a picture from every listed party at once, and each of
+  -- them learned the IP and the minute of everyone who was only looking. A
+  -- server's icon lived in its own *public* bucket, so that fetch carried no
+  -- session and the operator saw raw addresses.
   --
-  -- It does not close the larger hole, which is a decision rather than a bug:
-  -- the bytes still come from an address the *publisher* chose, so a listing
-  -- can count who opened the directory and when. That is the same tracking
-  -- `LinkPreview` exists to refuse, and closing it properly means hosting
-  -- these icons here rather than linking them.
-  icon_url     TEXT                 CHECK (icon_url ~ '^https://[^ ]+$'
-                                           AND length(icon_url) <= 500),
+  -- Now the publisher's client copies the picture into central at publish time
+  -- and this names the copy. Central learns who browsed, and already did: it
+  -- served the row. The shape is `<owner uid>/<random>`, which is what the
+  -- bucket's own-folder write policy enforces — so a path here cannot name
+  -- somebody else's object even though nothing but that policy checks it.
+  icon_path    TEXT                 CHECK (length(icon_path) <= 200),
 
   -- Up to five lowercase slugs, which is the whole of the browser's filtering.
   -- A fixed category list would need a migration every time a community turns
@@ -269,22 +268,21 @@ CREATE TABLE IF NOT EXISTS public_bots (
 
   name         TEXT        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 64),
   description  TEXT                 CHECK (length(description) <= 300),
-  -- The one URL in either listing that a client actually dereferences: the
-  -- directory draws it with `CachedNetworkImage` the moment the row is on
-  -- screen. So the scheme is a security question here, unlike `source_url`
-  -- below, which central checks for tidiness and nobody fetches.
+  -- An object in the `directory-icons` bucket (005), not an address.
   --
-  -- https only, for the same reason `supabase_url` is: plain http would hand
-  -- every passive observer the list of communities somebody was browsing, and
-  -- a scheme that is not the web has no business reaching an image loader.
+  -- This was `icon_url`, and the directory drew it with `CachedNetworkImage`
+  -- straight from wherever it pointed — which the publisher chose. So opening
+  -- the browser fetched a picture from every listed party at once, and each of
+  -- them learned the IP and the minute of everyone who was only looking. A
+  -- server's icon lived in its own *public* bucket, so that fetch carried no
+  -- session and the operator saw raw addresses.
   --
-  -- It does not close the larger hole, which is a decision rather than a bug:
-  -- the bytes still come from an address the *publisher* chose, so a listing
-  -- can count who opened the directory and when. That is the same tracking
-  -- `LinkPreview` exists to refuse, and closing it properly means hosting
-  -- these icons here rather than linking them.
-  icon_url     TEXT                 CHECK (icon_url ~ '^https://[^ ]+$'
-                                           AND length(icon_url) <= 500),
+  -- Now the publisher's client copies the picture into central at publish time
+  -- and this names the copy. Central learns who browsed, and already did: it
+  -- served the row. The shape is `<owner uid>/<random>`, which is what the
+  -- bucket's own-folder write policy enforces — so a path here cannot name
+  -- somebody else's object even though nothing but that policy checks it.
+  icon_path    TEXT                 CHECK (length(icon_path) <= 200),
 
   -- Where the code is: the one line of provenance a stranger gets, and the
   -- only way to answer "what am I about to run?". Central checks that it is an
@@ -341,40 +339,37 @@ CREATE INDEX IF NOT EXISTS idx_public_bots_tags ON public_bots USING GIN (tags);
 
 CREATE INDEX IF NOT EXISTS idx_public_bots_owner ON public_bots (owner_id);
 
--- ---------- and the same rule on a table that already exists ----------
+-- ---------- and the same change on a table that already exists ----------
 -- Both listing tables are `CREATE TABLE IF NOT EXISTS`, which on a database
 -- that has them is skipped whole — column definitions, CHECK constraints and
--- all. So tightening `icon_url` above reaches a fresh database and silently
--- does nothing to a deployed one: the file says https, the table still says
--- any 500 characters, re-applying reports no error, and nothing anywhere
--- says the two disagree.
+-- all. So the column above reaches a fresh database and does nothing at all to
+-- a deployed one: re-applying reports no error, the file says `icon_path`, the
+-- table still says `icon_url`, and nothing says the two disagree.
 --
--- That is the gap this block closes, and it is the same reappliability every
--- policy and trigger in 003-007 was given: state the constraint rather than
--- assume the CREATE put it there.
+-- That is the gap this closes, and it is the same reappliability every policy
+-- and trigger in 003-007 was given: state the shape rather than assume the
+-- CREATE put it there.
 --
--- An icon that does not meet the rule becomes NULL rather than failing the
--- migration. A listing with no icon draws its initial, which is what an
--- unreachable icon already did, and refusing to apply the schema over a
--- cosmetic column would be a worse answer than dropping the value that was
--- the problem in the first place.
+-- The old values are dropped rather than carried across. They are addresses on
+-- somebody else's host and there is nothing here that could fetch one — doing
+-- that server-side would be central making a request to a URL a stranger
+-- chose, which is the hole in a different shape. A listing with no icon draws
+-- its initial, which is what an unreachable icon already did, and the next
+-- publish from its owner puts a real one back.
 DO $$
-DECLARE v_spelling TEXT :=
-  'icon_url ~ ''^https://[^ ]+$'' AND length(icon_url) <= 500';
 BEGIN
-  UPDATE public_bots    SET icon_url = NULL
-   WHERE icon_url IS NOT NULL AND icon_url !~ '^https://[^ ]+$';
-  UPDATE public_servers SET icon_url = NULL
-   WHERE icon_url IS NOT NULL AND icon_url !~ '^https://[^ ]+$';
+  ALTER TABLE public_bots    ADD COLUMN IF NOT EXISTS icon_path TEXT;
+  ALTER TABLE public_servers ADD COLUMN IF NOT EXISTS icon_path TEXT;
 
-  -- Named exactly as Postgres names an inline column CHECK, so a database
-  -- built from scratch and one upgraded here end up indistinguishable.
-  ALTER TABLE public_bots    DROP CONSTRAINT IF EXISTS public_bots_icon_url_check;
-  EXECUTE 'ALTER TABLE public_bots ADD CONSTRAINT public_bots_icon_url_check CHECK ('
-          || v_spelling || ')';
-  ALTER TABLE public_servers DROP CONSTRAINT IF EXISTS public_servers_icon_url_check;
-  EXECUTE 'ALTER TABLE public_servers ADD CONSTRAINT public_servers_icon_url_check CHECK ('
-          || v_spelling || ')';
+  ALTER TABLE public_bots    DROP CONSTRAINT IF EXISTS public_bots_icon_path_check;
+  ALTER TABLE public_bots    ADD  CONSTRAINT public_bots_icon_path_check
+    CHECK (length(icon_path) <= 200);
+  ALTER TABLE public_servers DROP CONSTRAINT IF EXISTS public_servers_icon_path_check;
+  ALTER TABLE public_servers ADD  CONSTRAINT public_servers_icon_path_check
+    CHECK (length(icon_path) <= 200);
+
+  ALTER TABLE public_bots    DROP COLUMN IF EXISTS icon_url;
+  ALTER TABLE public_servers DROP COLUMN IF EXISTS icon_url;
 END $$;
 
 -- ---------- likes ----------

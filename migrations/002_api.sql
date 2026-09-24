@@ -118,13 +118,18 @@ CREATE OR REPLACE FUNCTION max_public_servers() RETURNS INTEGER
 -- unique violation on (supabase_url, server_id) — a confusing error for a
 -- comprehensible situation. `owner_id` is taken from auth.uid() and never from
 -- the caller, so the definer rights widen nothing.
+-- Dropped first: the parameter was `p_icon_url` and CREATE OR REPLACE refuses
+-- to rename one, so a database that has the old signature would fail here
+-- rather than pick up the new column. The grants in 007 are reapplied after
+-- this file, which is the order every apply uses.
+DROP FUNCTION IF EXISTS publish_server(TEXT, UUID, TEXT, TEXT, TEXT, TEXT, TEXT[], INTEGER, BOOLEAN);
 CREATE OR REPLACE FUNCTION publish_server(
   p_supabase_url TEXT,
   p_server_id    UUID,
   p_invite_code  TEXT,
   p_name         TEXT,
   p_description  TEXT    DEFAULT NULL,
-  p_icon_url     TEXT    DEFAULT NULL,
+  p_icon_path    TEXT    DEFAULT NULL,
   p_tags         TEXT[]  DEFAULT '{}',
   p_member_count INTEGER DEFAULT 0,
   p_is_listed    BOOLEAN DEFAULT TRUE
@@ -159,17 +164,17 @@ BEGIN
   END IF;
 
   INSERT INTO public_servers (owner_id, supabase_url, server_id, invite_code,
-                              name, description, icon_url, tags,
+                              name, description, icon_path, tags,
                               member_count, is_listed)
        VALUES (auth.uid(), p_supabase_url, p_server_id, p_invite_code,
-               btrim(p_name), p_description, p_icon_url,
+               btrim(p_name), p_description, p_icon_path,
                COALESCE(p_tags, '{}'), GREATEST(COALESCE(p_member_count, 0), 0),
                COALESCE(p_is_listed, TRUE))
   ON CONFLICT (supabase_url, server_id) DO UPDATE
           SET invite_code  = EXCLUDED.invite_code,
               name         = EXCLUDED.name,
               description  = EXCLUDED.description,
-              icon_url     = EXCLUDED.icon_url,
+              icon_path    = EXCLUDED.icon_path,
               tags         = EXCLUDED.tags,
               member_count = EXCLUDED.member_count,
               is_listed    = EXCLUDED.is_listed,
@@ -204,12 +209,13 @@ CREATE OR REPLACE FUNCTION max_public_bots() RETURNS INTEGER
 -- Editing by id rather than upserting on (owner_id, name) is what lets a bot
 -- be renamed — an upsert on the name would quietly leave the old listing
 -- behind and spend another slot.
+DROP FUNCTION IF EXISTS publish_bot(UUID, TEXT, TEXT, TEXT, TEXT, TEXT[], JSONB, BOOLEAN);
 CREATE OR REPLACE FUNCTION publish_bot(
   p_id          UUID    DEFAULT NULL,
   p_name        TEXT    DEFAULT NULL,
   p_source_url  TEXT    DEFAULT NULL,
   p_description TEXT    DEFAULT NULL,
-  p_icon_url    TEXT    DEFAULT NULL,
+  p_icon_path   TEXT    DEFAULT NULL,
   p_tags        TEXT[]  DEFAULT '{}',
   p_manifest    JSONB   DEFAULT NULL,
   p_is_listed   BOOLEAN DEFAULT TRUE
@@ -232,9 +238,9 @@ BEGIN
       RAISE EXCEPTION 'listing_cap_reached';
     END IF;
 
-    INSERT INTO public_bots (owner_id, name, description, icon_url,
+    INSERT INTO public_bots (owner_id, name, description, icon_path,
                              source_url, tags, manifest, is_listed)
-         VALUES (auth.uid(), btrim(p_name), p_description, p_icon_url,
+         VALUES (auth.uid(), btrim(p_name), p_description, p_icon_path,
                  p_source_url, COALESCE(p_tags, '{}'), p_manifest,
                  COALESCE(p_is_listed, TRUE))
       RETURNING * INTO v_row;
@@ -247,7 +253,7 @@ BEGIN
   UPDATE public_bots
      SET name        = btrim(p_name),
          description = p_description,
-         icon_url    = p_icon_url,
+         icon_path   = p_icon_path,
          source_url  = p_source_url,
          tags        = COALESCE(p_tags, '{}'),
          manifest    = p_manifest,
@@ -843,6 +849,7 @@ COMMENT ON FUNCTION publish_server(TEXT, UUID, TEXT, TEXT, TEXT, TEXT,
 -- means this is the one argument the edge function must never take from its
 -- caller — it takes it from the verified JWT instead.
 
+DROP FUNCTION IF EXISTS publish_server_as(UUID, TEXT, UUID, TEXT, TEXT, TEXT, TEXT, TEXT[], INTEGER, BOOLEAN);
 CREATE OR REPLACE FUNCTION publish_server_as(
   p_owner        UUID,
   p_supabase_url TEXT,
@@ -850,7 +857,7 @@ CREATE OR REPLACE FUNCTION publish_server_as(
   p_invite_code  TEXT,
   p_name         TEXT,
   p_description  TEXT    DEFAULT NULL,
-  p_icon_url     TEXT    DEFAULT NULL,
+  p_icon_path    TEXT    DEFAULT NULL,
   p_tags         TEXT[]  DEFAULT '{}',
   p_member_count INTEGER DEFAULT 0,
   p_is_listed    BOOLEAN DEFAULT TRUE
@@ -887,17 +894,17 @@ BEGIN
   END IF;
 
   INSERT INTO public_servers (owner_id, supabase_url, server_id, invite_code,
-                              name, description, icon_url, tags,
+                              name, description, icon_path, tags,
                               member_count, is_listed)
        VALUES (p_owner, p_supabase_url, p_server_id, p_invite_code,
-               btrim(p_name), p_description, p_icon_url,
+               btrim(p_name), p_description, p_icon_path,
                COALESCE(p_tags, '{}'), GREATEST(COALESCE(p_member_count, 0), 0),
                COALESCE(p_is_listed, TRUE))
   ON CONFLICT (supabase_url, server_id) DO UPDATE
           SET invite_code  = EXCLUDED.invite_code,
               name         = EXCLUDED.name,
               description  = EXCLUDED.description,
-              icon_url     = EXCLUDED.icon_url,
+              icon_path    = EXCLUDED.icon_path,
               tags         = EXCLUDED.tags,
               member_count = EXCLUDED.member_count,
               is_listed    = EXCLUDED.is_listed,

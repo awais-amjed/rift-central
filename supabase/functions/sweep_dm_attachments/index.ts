@@ -2,7 +2,13 @@ import "@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 
 /**
- * Deletes central DM attachment blobs whose messages retention has removed.
+ * Deletes the blobs the database says nothing points at any more.
+ *
+ * Two buckets, one call. DM attachments whose messages retention has removed,
+ * and directory icons no listing names — the second rides along rather than
+ * getting a function of its own because it would need the same secret, the
+ * same config row and a second entry in the same cron job to do the same
+ * thing: ask the database what is unreferenced and hand the list to Storage.
  *
  * Called once a day by the database (migration 018), never by clients. The
  * database decides which blobs — `expired_dm_attachments()`, migration 017 —
@@ -15,6 +21,7 @@ import { createClient } from "@supabase/supabase-js";
  */
 
 const BUCKET = "central-dm-attachments";
+const ICON_BUCKET = "directory-icons";
 
 /** Blobs per database query and per Storage API call. */
 const BATCH = 1000;
@@ -38,29 +45,52 @@ Deno.serve(async (req) => {
     return json({ error: "Not allowed" }, 403);
   }
 
+  const attachments = await drain(BUCKET, "expired_dm_attachments");
+  if ("error" in attachments) return attachments.response;
+
+  // Icons after attachments, and never allowed to fail the attachment half:
+  // the two are unrelated, and a directory icon left an extra day is a picture
+  // nobody sees, while a DM blob left behind is storage somebody pays for.
+  const icons = await drain(ICON_BUCKET, "expired_directory_icons");
+  const iconsSwept = "error" in icons ? 0 : icons.swept;
+
+  console.log(
+    `[sweep] removed ${attachments.swept} expired attachment(s), ${iconsSwept} unused icon(s)`,
+  );
+  return json({ swept: attachments.swept, icons: iconsSwept });
+});
+
+/**
+ * Empty one bucket of whatever [rpc] says is unreferenced, a batch at a time.
+ *
+ * Both RPCs answer the same shape — an array of object names — because both
+ * are asking the same question of different tables, so one loop serves both.
+ */
+async function drain(
+  bucket: string,
+  rpc: string,
+): Promise<{ swept: number } | { error: true; response: Response }> {
   let swept = 0;
   for (let batch = 0; batch < MAX_BATCHES; batch++) {
-    const { data, error } = await supabase.rpc("expired_dm_attachments", { p_limit: BATCH });
+    const { data, error } = await supabase.rpc(rpc, { p_limit: BATCH });
     if (error) {
-      console.error("[sweep] listing expired attachments:", error);
-      return json({ error: "Could not list expired attachments", swept }, 500);
+      console.error(`[sweep] listing from ${rpc}:`, error);
+      return { error: true, response: json({ error: `Could not list from ${rpc}`, swept }, 500) };
     }
 
     const names = (data ?? []) as string[];
     if (names.length === 0) break;
 
-    const { error: removeError } = await supabase.storage.from(BUCKET).remove(names);
+    const { error: removeError } = await supabase.storage.from(bucket).remove(names);
     if (removeError) {
-      console.error("[sweep] removing attachments:", removeError);
-      return json({ error: "Could not remove attachments", swept }, 500);
+      console.error(`[sweep] removing from ${bucket}:`, removeError);
+      return { error: true, response: json({ error: `Could not empty ${bucket}`, swept }, 500) };
     }
     swept += names.length;
     if (names.length < BATCH) break;
   }
-
-  console.log(`[sweep] removed ${swept} expired attachment(s)`);
-  return json({ swept });
-});
+  return { swept };
+}
 
 /** Compare two secrets in time that does not depend on where they differ. */
 async function sameSecret(a: string, b: string): Promise<boolean> {

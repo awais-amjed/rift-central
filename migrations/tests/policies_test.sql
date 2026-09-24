@@ -1815,4 +1815,104 @@ DO $$ BEGIN
   RAISE NOTICE 'ok  capping one conversation leaves every other one alone';
 END $$;
 
+-- ============================================================
+-- Directory icons (005)
+-- ============================================================
+-- The picture beside a listing, held here rather than fetched from the
+-- publisher's own host. What is being asserted is the bucket's shape: anyone
+-- signed in may look, nobody may write outside their own folder, an account
+-- has a ceiling, and the sweep offers back exactly the objects no listing
+-- names.
+
+RESET ROLE;
+DO $$
+DECLARE
+  v_alice TEXT := 'cccc0000-0000-4000-8000-000000000001';
+  v_bob   TEXT := 'cccc0000-0000-4000-8000-000000000002';
+  v_left  INT;
+BEGIN
+  DELETE FROM storage.objects WHERE bucket_id = 'directory-icons';
+  DELETE FROM public_bots;
+
+  -- One icon Alice's listing points at, one she has replaced and nobody names.
+  INSERT INTO storage.objects (bucket_id, name, owner, created_at) VALUES
+    ('directory-icons', v_alice || '/live.img', v_alice::UUID, now() - interval '2 hours'),
+    ('directory-icons', v_alice || '/stale.img', v_alice::UUID, now() - interval '2 hours'),
+    -- Uploaded a moment ago: the grace period protects the listing that is
+    -- milliseconds away from naming it.
+    ('directory-icons', v_alice || '/justnow.img', v_alice::UUID, now());
+
+  INSERT INTO public_bots (owner_id, name, source_url, icon_path)
+  VALUES (v_alice::UUID, 'icontest', 'https://example.com/r', v_alice || '/live.img');
+
+  IF (SELECT count(*) FROM expired_directory_icons()) <> 1
+     OR NOT EXISTS (SELECT 1 FROM expired_directory_icons() n WHERE n = v_alice || '/stale.img') THEN
+    RAISE EXCEPTION 'FAIL: the sweep did not offer back exactly the unused icon';
+  END IF;
+  RAISE NOTICE 'ok  the sweep offers back the icon no listing names, and only that';
+END $$;
+
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_alice TEXT := 'cccc0000-0000-4000-8000-000000000001';
+  v_bob   TEXT := 'cccc0000-0000-4000-8000-000000000002';
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"' || v_alice || '","role":"authenticated"}', true);
+
+  -- Everyone browsing draws every icon on the page, so looking is open to any
+  -- account — including at somebody else's.
+  IF NOT EXISTS (SELECT 1 FROM storage.objects
+                  WHERE bucket_id = 'directory-icons' AND name = v_alice || '/live.img') THEN
+    RAISE EXCEPTION 'FAIL: a signed-in account cannot read a directory icon';
+  END IF;
+
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name)
+    VALUES ('directory-icons', v_bob || '/forged.img');
+    RAISE EXCEPTION 'FAIL: an account wrote an icon under somebody else''s folder';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  anyone signed in may look, nobody may write outside their own folder';
+END $$;
+
+RESET ROLE;
+
+DO $$
+DECLARE
+  v_alice TEXT := 'cccc0000-0000-4000-8000-000000000001';
+  v_held  INT;
+BEGIN
+  -- The bound that does not wait for the sweep. Publishing mints a fresh path
+  -- every time, so without this an account editing its listing in a loop fills
+  -- the bucket between two runs of it — the `avatars` mistake, not repeated.
+  DELETE FROM storage.objects WHERE bucket_id = 'directory-icons';
+  FOR i IN 1..icons_per_account() LOOP
+    INSERT INTO storage.objects (bucket_id, name)
+    VALUES ('directory-icons', v_alice || '/' || i || '.img');
+  END LOOP;
+
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name)
+    VALUES ('directory-icons', v_alice || '/over.img');
+    RAISE EXCEPTION 'FAIL: an account may hold listing icons without bound';
+  EXCEPTION WHEN raise_exception OR disk_full THEN
+    IF SQLERRM LIKE 'FAIL:%' THEN RAISE; END IF;
+  END;
+
+  SELECT count(*) INTO v_held FROM storage.objects WHERE bucket_id = 'directory-icons';
+  IF v_held <> icons_per_account() THEN
+    RAISE EXCEPTION 'FAIL: held % icons, ceiling is %', v_held, icons_per_account();
+  END IF;
+
+  -- And it is per account, not per bucket.
+  INSERT INTO storage.objects (bucket_id, name)
+  VALUES ('directory-icons', 'cccc0000-0000-4000-8000-000000000002/mine.img');
+  RAISE NOTICE 'ok  an account holds icons_per_account() icons and no more';
+END $$;
+
+SET LOCAL ROLE authenticated;
+
 ROLLBACK;
