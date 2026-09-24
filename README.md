@@ -124,12 +124,25 @@ arrangement. They are unrelated, they arrive at different times, and only one
 of them is about growth — which is worth keeping straight, because the cheap
 answer to one is not an answer to the other.
 
-**Capacity: concurrent Realtime connections.** 200 on Free, 500 on Pro. Central's
-Realtime carries `user:<id>` and nothing else — DMs, friend activity, typing —
-so its connection count is very close to "people with the app open right now",
-whatever servers they are on and however quiet they are. That makes the cap a
-ceiling on *simultaneous users of Rift*, which is a smaller number than it
-sounds like and arrives sooner than the storage or bandwidth limits do.
+**Capacity: concurrent Realtime connections.** 200 included on Free, 500 on Pro,
+and — this is the part that matters — **over that it is a meter, not a wall**:
+$10 per additional 1,000 peak connections, billed against the highest
+simultaneous count in the cycle. Messages are metered the same way, 5 million
+included on Pro and $2.50 per million after.
+
+So the cap does not stop Rift working at 501 users; it starts charging. There
+are two ways it becomes a wall rather than a bill. With a spend cap on (and
+always on Free) an overage buys a notification and a grace period instead of an
+invoice. And a project that *sustains* consumption far past its plan can be
+suspended by hand, which shows up as `RealtimeDisabledForTenant`: new
+connections fail and live subscriptions stop receiving anything.
+
+Central's Realtime carries `user:<id>` and nothing else — DMs and friend
+activity — so its connection count is very close to "people with the app open
+right now", whatever servers they are on and however quiet they are. Its
+*message* count is not: DM traffic only, because typing is not relayed here.
+That is worth keeping true, since typing indicators are what would turn a
+modest meter into the dominant line on the bill.
 
 None of this is about query cost, and no amount of schema work moves it. A
 connection is a socket and something like 85–230 KB of Realtime memory; a
@@ -143,7 +156,13 @@ software is nowhere near the constraint; the plan is.
 **Lock-in: the vendor hostname.** `SupabaseConfig.supabaseUrl` is compiled into
 every client that has ever been installed, and it is currently
 `<ref>.supabase.co`. Giving the project a name we own means Supabase's Custom
-Domain add-on, which is Pro-and-above and billed on top of it.
+Domain add-on: $10 per domain per month, Pro-and-above, on top of the $25.
+
+That is the cheapest item on this page and the one with a deadline. A name we
+own can be repointed at a self-hosted stack with a DNS change; a vendor URL
+cannot be repointed at all, and every install made before the switch is pinned
+to it for as long as that install survives. The add-on is worth buying before
+the first real user, not when the move is wanted.
 
 The push relay already solves this problem for itself, and the way it does so
 is not available here. `push.joinrift.app` is a **Cloudflare Worker** custom
@@ -152,12 +171,12 @@ one POST with no session and no upgrade. Central's API is GoTrue redirects,
 PostgREST and WebSockets, so a forwarder in front of it is not a DNS change but
 a proxy with opinions about every one of those.
 
-So the distinction is: the connection cap is hit by growing, and the hostname
-is hit by wanting to leave. The second is the one that compounds, because every
-day on a vendor URL adds installs pinned to it — the move stops being a DNS
-change and becomes an app update with a migration window. If central is ever
-going to be self-hosted, the hostname is the thing to do first and the capacity
-is the thing that decides when.
+So the distinction is: the connection cap is hit by growing and answered with
+money, and the hostname is hit by wanting to leave and answered with an app
+update. The second is the one that compounds, because every day on a vendor URL
+adds installs pinned to it. If central is ever going to be self-hosted, the
+hostname is the thing to do first and the capacity is only the thing that
+decides when.
 
 What self-hosting would have to replace: Postgres with `pg_cron` and `pg_net`,
 GoTrue, PostgREST, Realtime, Storage, and the three edge functions — which are
