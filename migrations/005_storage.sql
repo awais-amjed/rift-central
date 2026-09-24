@@ -142,11 +142,24 @@ BEGIN
   IF NEW.bucket_id <> 'directory-icons' THEN
     RETURN NEW;
   END IF;
-  v_owner := (storage.foldername(NEW.name))[1];
+  -- `split_part`, not `storage.foldername`, and only because one of them can
+  -- be indexed. `foldername` is a plpgsql function returning an array, so a
+  -- predicate built on it is evaluated for every object in the bucket — this
+  -- count was a scan of every icon central holds, per upload: 99 ms with
+  -- 40,000 of them, and growing with the pile the ceiling exists to bound.
+  -- `split_part` is immutable and built in, so `objects_icon_owner` below
+  -- answers it directly.
+  --
+  -- The two agree. `foldername('uid/abc')[1]` is 'uid' and so is
+  -- `split_part('uid/abc', '/', 1)`; on a name with no slash at all
+  -- `foldername` yields an empty array and therefore NULL, which is what the
+  -- NULLIF reproduces — split_part would otherwise hand back the whole name
+  -- and call it a folder.
+  v_owner := NULLIF(split_part(NEW.name, '/', 1), NEW.name);
   IF v_owner IS NOT NULL
      AND (SELECT count(*) FROM storage.objects o
            WHERE o.bucket_id = 'directory-icons'
-             AND (storage.foldername(o.name))[1] = v_owner) >= icons_per_account() THEN
+             AND split_part(o.name, '/', 1) = v_owner) >= icons_per_account() THEN
     RAISE EXCEPTION
       'Too many listing icons stored for this account — the unused ones are cleared up shortly'
       USING ERRCODE = 'disk_full';
@@ -157,6 +170,13 @@ END $$;
 DROP TRIGGER IF EXISTS directory_icons_ceiling ON storage.objects;
 CREATE TRIGGER directory_icons_ceiling BEFORE INSERT ON storage.objects
   FOR EACH ROW EXECUTE FUNCTION refuse_excess_icons();
+
+-- What makes the ceiling above cost a lookup instead of a scan. The bucket is
+-- in the key because the question is never asked without one, and because
+-- every other bucket's objects are then not in this index at all — which
+-- matters here, where the other bucket is every DM attachment ever sent.
+CREATE INDEX IF NOT EXISTS objects_icon_owner
+  ON storage.objects (bucket_id, split_part(name, '/', 1));
 
 -- Everything in the bucket that no listing points at, for the nightly sweep.
 -- The grace period is the same rail `orphaned_attachments` uses on a server:
