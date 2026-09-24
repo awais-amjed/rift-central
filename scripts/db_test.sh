@@ -91,6 +91,11 @@ CREATE TABLE IF NOT EXISTS storage.objects (
   metadata   JSONB
 );
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+-- Storage's own index, and the collation is the point: `(bucket_id, name
+-- COLLATE "C")` is what makes a prefix range on a folder an index scan, and
+-- the icon ceiling in 005 is written against it.
+CREATE INDEX IF NOT EXISTS idx_objects_bucket_id_name
+  ON storage.objects (bucket_id, name COLLATE "C");
 CREATE OR REPLACE FUNCTION storage.foldername(name TEXT) RETURNS TEXT[]
   LANGUAGE plpgsql IMMUTABLE AS $f$
 DECLARE _parts TEXT[];
