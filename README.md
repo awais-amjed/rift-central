@@ -116,6 +116,55 @@ makes `rift-self-host` upgradable exists because that repo has neither.
 
 The relay is deployed separately; see `relay/README.md`.
 
+## The two ceilings on managed hosting
+
+Central is the one part of Rift that cannot be somebody else's problem, and it
+is currently a managed Supabase project. Two limits will eventually end that
+arrangement. They are unrelated, they arrive at different times, and only one
+of them is about growth — which is worth keeping straight, because the cheap
+answer to one is not an answer to the other.
+
+**Capacity: concurrent Realtime connections.** 200 on Free, 500 on Pro. Central's
+Realtime carries `user:<id>` and nothing else — DMs, friend activity, typing —
+so its connection count is very close to "people with the app open right now",
+whatever servers they are on and however quiet they are. That makes the cap a
+ceiling on *simultaneous users of Rift*, which is a smaller number than it
+sounds like and arrives sooner than the storage or bandwidth limits do.
+
+None of this is about query cost, and no amount of schema work moves it. A
+connection is a socket and something like 85–230 KB of Realtime memory; a
+faster query does not let a tenant hold more of them. The one change that ever
+moved this number was giving each client a single socket per server instead of
+eight, which was worth about 8× and cannot be repeated — one is the floor. For
+reference, a self-hosted Realtime measured on a 20-core development box held
+10,000 connections in 1.6 GiB and sustained ~97,000 deliveries a second. The
+software is nowhere near the constraint; the plan is.
+
+**Lock-in: the vendor hostname.** `SupabaseConfig.supabaseUrl` is compiled into
+every client that has ever been installed, and it is currently
+`<ref>.supabase.co`. Giving the project a name we own means Supabase's Custom
+Domain add-on, which is Pro-and-above and billed on top of it.
+
+The push relay already solves this problem for itself, and the way it does so
+is not available here. `push.joinrift.app` is a **Cloudflare Worker** custom
+domain — free — forwarding to the function URL, which works because a push is
+one POST with no session and no upgrade. Central's API is GoTrue redirects,
+PostgREST and WebSockets, so a forwarder in front of it is not a DNS change but
+a proxy with opinions about every one of those.
+
+So the distinction is: the connection cap is hit by growing, and the hostname
+is hit by wanting to leave. The second is the one that compounds, because every
+day on a vendor URL adds installs pinned to it — the move stops being a DNS
+change and becomes an app update with a migration window. If central is ever
+going to be self-hosted, the hostname is the thing to do first and the capacity
+is the thing that decides when.
+
+What self-hosting would have to replace: Postgres with `pg_cron` and `pg_net`,
+GoTrue, PostgREST, Realtime, Storage, and the three edge functions — which are
+ordinary Deno HTTP handlers and need no Supabase runtime; `relay/server.mjs`
+already runs one of them on plain Node. SES and the Firebase credentials are
+external either way and do not move.
+
 ## Bringing up a project from nothing
 
 The seven migration files are the schema and nothing else. A Supabase project
