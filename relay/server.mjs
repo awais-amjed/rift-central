@@ -7,7 +7,7 @@
 // build step.
 //
 //   FCM_SERVICE_ACCOUNT="$(cat rift-service-key.json)" \
-//   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... PUSH_SECRET=... \
+//   SUPABASE_URL=... RIFT_SECRET_KEY=... PUSH_SECRET=... \
 //   node relay/server.mjs
 import { createServer } from "node:http";
 import { Buffer } from "node:buffer";

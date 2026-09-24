@@ -2,9 +2,15 @@ import "@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { safePost } from "./safe_fetch.ts";
 
+// `RIFT_SECRET_KEY` first, the legacy JWT after it. The platform stops
+// injecting `SUPABASE_SERVICE_ROLE_KEY` once a project disables its legacy
+// API keys, and that key is an HS256 token signed with the project's old JWT
+// secret — a secret the dashboard hands out on request. See the README's
+// "Bringing up a project from nothing".
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  (Deno.env.get("RIFT_SECRET_KEY") ??
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))!,
 );
 
 /**

@@ -150,16 +150,48 @@ own callers if that flag is forgotten.
 supabase functions list --project-ref <ref>   # three, ACTIVE, verify_jwt as above
 ```
 
-### 3. The three secrets
+### 3. The four secrets
 
 `supabase secrets set NAME=value --project-ref <ref>`. The `SUPABASE_*` entries
-alongside them are put there by the platform; these three are not.
+alongside them are put there by the platform; these four are not.
 
 | Secret | Read by | What it is |
 |---|---|---|
+| `RIFT_SECRET_KEY` | all three functions | The project's `sb_secret_…` key — what a function uses to reach the database as `service_role` |
 | `PUSH_SECRET` | `push_send/relay.ts` | Proves a push request came from a database that was told it, not from the internet |
 | `FCM_SERVICE_ACCOUNT` | `push_send/relay.ts` | The Firebase service-account JSON, whole, as one value |
 | `ATTACHMENT_SWEEP_SECRET` | `sweep_dm_attachments/index.ts` | The same idea for the nightly sweep |
+
+**`RIFT_SECRET_KEY` rather than the platform's `SUPABASE_SERVICE_ROLE_KEY`,
+and this is the one item here that is a decision rather than a step.** A
+project starts with two key systems live at once. The old one is a pair of
+HS256 JWTs — `anon` and `service_role` — signed with a single project-wide
+secret, and that secret is readable by anyone who can reach the management
+API for the project, including through the PostgREST config endpoint. So the
+legacy `service_role` key is a permanent, unexpiring, RLS-bypassing
+credential recoverable from a settings page, and it does not expire until
+2036.
+
+Disabling the legacy keys is what takes that away, and the platform then
+stops injecting `SUPABASE_SERVICE_ROLE_KEY` into functions — which is why the
+functions have to be moved onto a key of their own *first*, or all three stop
+being able to reach the database. Order:
+
+1. `supabase secrets set RIFT_SECRET_KEY=sb_secret_…` (reveal it from the
+   dashboard's API keys page, or `/v1/projects/<ref>/api-keys?reveal=true`)
+2. deploy all three functions — each reads `RIFT_SECRET_KEY` and falls back to
+   the legacy name, so this step is safe in either order with the one above
+3. `PUT /v1/projects/<ref>/api-keys/legacy?enabled=false` — note the query
+   string; a JSON body is rejected with a message about a missing string
+4. revoke the HS256 signing key, which is what the old secret actually was:
+   `PATCH /v1/projects/<ref>/config/auth/signing-keys/<hs256 id>` with
+   `{"status":"revoked"}`. It will be `previously_used` next to an `in_use`
+   ES256 key; sessions are ES256 and access tokens live an hour, so nothing
+   signed with it is still valid by the time anyone gets here.
+
+Done on the live project on 24 Sep 2026. To prove step 4 took, mint an HS256
+`service_role` token with the old secret and call PostgREST with it: `401
+Invalid API key` is the answer you want.
 
 `supabase secrets list` shows a digest rather than the value, so a secret
 cannot be read back out of the project to fill in step 4 — generate it once
@@ -244,7 +276,7 @@ is a sentence rather than a silence.
 ### 7. The client
 
 `SupabaseConfig` in the `rift` repo carries the project URL and the publishable
-key. A new project is a new URL and a new key, and every installed client is
+key — `sb_publishable_…`, not the legacy `anon` JWT, which step 3 turns off. A new project is a new URL and a new key, and every installed client is
 pinned to the old ones — which is fine while there are no real accounts, and is
 a migration once there are.
 

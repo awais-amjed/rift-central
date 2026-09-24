@@ -33,9 +33,11 @@ const BATCH = 1000;
  */
 const MAX_BATCHES = 20;
 
+// `RIFT_SECRET_KEY` first — see `publish_server/index.ts` for why.
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  (Deno.env.get("RIFT_SECRET_KEY") ??
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))!,
 );
 
 Deno.serve(async (req) => {

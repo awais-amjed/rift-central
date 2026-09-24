@@ -41,14 +41,15 @@ Every host is then a few lines of adapter:
 | Cloudflare Workers | `relay/worker.js` | Also runs as a pass-through forwarder — see below |
 
 All four read the same configuration: `SUPABASE_URL`,
-`SUPABASE_SERVICE_ROLE_KEY`, `PUSH_SECRET`, `FCM_SERVICE_ACCOUNT`.
+`RIFT_SECRET_KEY` (or the legacy `SUPABASE_SERVICE_ROLE_KEY`), `PUSH_SECRET`,
+`FCM_SERVICE_ACCOUNT`.
 
 ### Running it on Node
 
 ```
 FCM_SERVICE_ACCOUNT="$(cat rift-service-key.json)" \
 SUPABASE_URL=https://<ref>.supabase.co \
-SUPABASE_SERVICE_ROLE_KEY=... \
+RIFT_SECRET_KEY=sb_secret_... \
 PUSH_SECRET=... \
 node relay/server.mjs
 ```

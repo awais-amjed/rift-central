@@ -275,9 +275,20 @@ export function relayConfigFromEnv(
     if (!value) throw new Error(`missing configuration: ${key}`);
     return value;
   };
+  // The first of several names that is set. `RIFT_SECRET_KEY` is the current
+  // one; `SUPABASE_SERVICE_ROLE_KEY` is the legacy JWT the platform stops
+  // injecting once a project disables its legacy API keys.
+  const readFirst = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = env[key] ?? globals.Deno?.env.get(key) ??
+        globals.process?.env[key];
+      if (value) return value;
+    }
+    throw new Error(`missing configuration: ${keys[0]}`);
+  };
   return {
     supabaseUrl: read("SUPABASE_URL"),
-    serviceRoleKey: read("SUPABASE_SERVICE_ROLE_KEY"),
+    serviceRoleKey: readFirst("RIFT_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
     pushSecret: read("PUSH_SECRET"),
     serviceAccount: JSON.parse(read("FCM_SERVICE_ACCOUNT")),
   };
