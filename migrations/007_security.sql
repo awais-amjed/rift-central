@@ -43,6 +43,9 @@ GRANT SELECT, DELETE ON dm_messages TO authenticated;
 
 GRANT UPDATE (ciphertext, nonce, signature, key_version) ON dm_messages TO authenticated;
 
+-- Read-only: pinning is `set_pinned`, which holds the cap.
+GRANT SELECT ON dm_message_pins TO authenticated;
+
 GRANT SELECT, INSERT ON read_state TO authenticated;
 
 GRANT UPDATE (last_read_id, updated_at) ON read_state TO authenticated;
@@ -54,6 +57,10 @@ CREATE POLICY users_insert_self ON users FOR INSERT TO authenticated
 DROP POLICY IF EXISTS users_update_self ON users;
 CREATE POLICY users_update_self ON users FOR UPDATE TO authenticated
   USING (id = auth.uid()) WITH CHECK (id = auth.uid());
+
+DROP POLICY IF EXISTS dm_message_pins_select ON dm_message_pins;
+CREATE POLICY dm_message_pins_select ON dm_message_pins FOR SELECT TO authenticated
+  USING ((SELECT auth.uid()) IN (user_low, user_high));
 
 DROP POLICY IF EXISTS dm_messages_select ON dm_messages;
 CREATE POLICY dm_messages_select ON dm_messages FOR SELECT TO authenticated
@@ -331,6 +338,8 @@ GRANT EXECUTE ON FUNCTION directory_profiles(UUID[])         TO authenticated;
 
 GRANT EXECUTE ON FUNCTION send_dm(UUID, TEXT, TEXT, TEXT, INTEGER) TO authenticated;
 
+GRANT EXECUTE ON FUNCTION set_pinned(BIGINT, BOOLEAN) TO authenticated;
+
 -- ============================================================
 -- 5. Privileges
 -- ============================================================
@@ -442,6 +451,8 @@ GRANT EXECUTE ON FUNCTION unread_counts() TO authenticated;
 ALTER TABLE users                ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE dm_messages          ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE dm_message_pins      ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE read_state           ENABLE ROW LEVEL SECURITY;
 

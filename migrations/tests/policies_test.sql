@@ -1913,6 +1913,83 @@ BEGIN
   RAISE NOTICE 'ok  an account holds icons_per_account() icons and no more';
 END $$;
 
+-- ============================================================
+-- 20. Pins
+-- ============================================================
+-- Either side of a DM pins it and nobody else sees it; fifty to a
+-- conversation; and only through `set_pinned`, which holds that cap.
+
+RESET ROLE;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims', '{}', true); END $$;
+INSERT INTO dm_messages (id, sender_id, recipient_id, ciphertext, nonce, signature, key_version)
+SELECT 7600 + g, 'cccc0000-0000-4000-8000-000000000002', 'cccc0000-0000-4000-8000-000000000001', 'c', 'n', 's', 1 FROM generate_series(0, 50) AS g;
+
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  PERFORM set_pinned(7600, true);
+  PERFORM set_pinned(7600, true);
+  IF (SELECT count(*) FROM dm_message_pins WHERE message_id = 7600) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: the pin did not land once';
+  END IF;
+  BEGIN
+    INSERT INTO dm_message_pins (message_id, user_low, user_high)
+    VALUES (7601, 'cccc0000-0000-4000-8000-000000000001', 'cccc0000-0000-4000-8000-000000000002');
+    RAISE EXCEPTION 'FAIL: a pin was written by hand';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  either side pins, once, and only through set_pinned';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM dm_message_pins WHERE message_id = 7600) THEN
+    RAISE EXCEPTION 'FAIL: the other side cannot see the pin';
+  END IF;
+  PERFORM set_pinned(7600, false);
+  RAISE NOTICE 'ok  the other side sees it and may take it down';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000003","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM set_pinned(7600, true);
+    RAISE EXCEPTION 'FAIL: a third account pinned somebody else''s DM';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'message_not_found' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  and nobody else touches it';
+END $$;
+
+RESET ROLE;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims', '{}', true); END $$;
+INSERT INTO dm_message_pins (message_id, user_low, user_high)
+SELECT 7600 + g, 'cccc0000-0000-4000-8000-000000000001', 'cccc0000-0000-4000-8000-000000000002' FROM generate_series(0, 49) AS g;
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM set_pinned(7650, true);
+    RAISE EXCEPTION 'FAIL: a fifty-first pin landed';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'pin_limit' THEN RAISE; END IF;
+  END;
+  PERFORM set_pinned(7600, true);
+  RAISE NOTICE 'ok  fifty to a conversation, and re-pinning is not a new one';
+END $$;
+
 SET LOCAL ROLE authenticated;
 
 ROLLBACK;

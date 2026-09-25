@@ -1225,3 +1225,50 @@ COMMENT ON FUNCTION unread_counts() IS
   'Unread DM badges and notification levels: {dms, prefs}. Counts stop at '
   'unread_cap(), so the work is the number of conversations rather than the '
   'number of messages in them.';
+
+-- ============================================================
+-- Pins
+-- ============================================================
+-- A function rather than an insert, for the cap: fifty per conversation, the
+-- same as a server's, because the list is fetched whole and every row in it
+-- is a message to decrypt. Both sides are told, the pinner included, so their
+-- other devices keep up.
+
+CREATE OR REPLACE FUNCTION set_pinned(p_message BIGINT, p_pinned BOOLEAN)
+  RETURNS VOID
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_low  UUID;
+  v_high UUID;
+BEGIN
+  SELECT LEAST(d.sender_id, d.recipient_id), GREATEST(d.sender_id, d.recipient_id)
+    INTO v_low, v_high
+    FROM dm_messages d
+   WHERE d.id = p_message AND auth.uid() IN (d.sender_id, d.recipient_id);
+  IF v_low IS NULL THEN
+    RAISE EXCEPTION 'message_not_found';
+  END IF;
+
+  IF p_pinned THEN
+    IF NOT EXISTS (SELECT 1 FROM dm_message_pins WHERE message_id = p_message)
+       AND (SELECT count(*) FROM dm_message_pins
+             WHERE user_low = v_low AND user_high = v_high) >= 50
+    THEN
+      RAISE EXCEPTION 'pin_limit';
+    END IF;
+    INSERT INTO dm_message_pins (message_id, user_low, user_high, pinned_by)
+    VALUES (p_message, v_low, v_high, auth.uid())
+    ON CONFLICT (message_id) DO NOTHING;
+  ELSE
+    DELETE FROM dm_message_pins WHERE message_id = p_message;
+  END IF;
+
+  PERFORM tell_user(u, 'dm_pin',
+            jsonb_build_object('message_id', p_message,
+                               'user_low', v_low, 'user_high', v_high))
+     FROM unnest(ARRAY[v_low, v_high]) AS u;
+END; $$;
+
+COMMENT ON FUNCTION set_pinned(BIGINT, BOOLEAN) IS
+  'Pin or unpin a DM, for either of the two. Fifty per conversation; the '
+  'fifty-first raises pin_limit. Rings dm_pin on both sides.';

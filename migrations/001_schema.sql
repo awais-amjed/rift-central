@@ -97,6 +97,24 @@ CREATE INDEX IF NOT EXISTS idx_dm_messages_recipient ON dm_messages (recipient_i
 
 CREATE INDEX IF NOT EXISTS idx_dm_messages_sender    ON dm_messages (sender_id, id);
 
+-- A conversation's pins. Either of the two may pin, so nothing is checked but
+-- that the message is theirs. The pair is copied off the message, sorted, so
+-- the list and its cap are one index range whichever side asks — the same
+-- shape as a server's `dm_message_pins`. A pin names a message and never its
+-- words, and goes when the message does: a 30-day message cannot be kept past
+-- its expiry by pinning it.
+CREATE TABLE IF NOT EXISTS dm_message_pins (
+  message_id BIGINT      PRIMARY KEY REFERENCES dm_messages(id) ON DELETE CASCADE,
+  user_low   UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_high  UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  pinned_by  UUID        REFERENCES users(id) ON DELETE SET NULL,
+  pinned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (user_low < user_high)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dm_message_pins_pair
+  ON dm_message_pins (user_low, user_high, pinned_at DESC);
+
 -- ============================================================
 -- Read state
 -- ============================================================
