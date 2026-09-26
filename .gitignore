@@ -11,3 +11,7 @@ supabase/.temp/
 
 # Wrangler's local state for the relay Worker.
 .wrangler/
+
+# The local stack's secrets and the config rendered from them (stack/setup.py).
+stack/.env
+stack/volumes/api/

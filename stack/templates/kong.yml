@@ -1,0 +1,208 @@
+# Kong's declarative config for central, rendered by setup.py with the stack's
+# keys substituted into `volumes/api/kong.yml`. Doubled-brace placeholders are
+# setup.py's; the `$(...)` expressions are Kong's own and survive rendering.
+#
+# Taken from rift-self-host's, which is trimmed from upstream's to the routes a
+# client calls. Edge functions are not routed yet: this stack does not run
+# them (see README.md).
+_format_version: "2.1"
+_transform: true
+
+###
+### Who may call, and as what
+###
+### Two credentials per consumer. The `sb_publishable_` / `sb_secret_` pair is
+### what clients are issued; the legacy JWT pair is still accepted so a client
+### holding an older key keeps working. The request-transformer on each route
+### below swaps an opaque key for the matching signed JWT before the request
+### reaches the service, because only Kong knows the mapping — everything
+### behind it verifies an ordinary JWT against the stack's JWKS.
+###
+consumers:
+  - username: anon
+    keyauth_credentials:
+      - key: {{PUBLISHABLE_KEY}}
+      - key: {{ANON_KEY}}
+  - username: service_role
+    keyauth_credentials:
+      - key: {{SECRET_KEY}}
+      - key: {{SERVICE_ROLE_KEY}}
+
+acls:
+  - consumer: anon
+    group: anon
+  - consumer: service_role
+    group: admin
+
+###
+### Routes
+###
+services:
+  ## Open: confirmation links land here with no key of their own.
+  - name: auth-v1-open
+    _comment: "Auth: /auth/v1/verify* -> http://auth:9999/verify*"
+    url: http://auth:9999/verify
+    routes:
+      - name: auth-v1-open
+        strip_path: true
+        paths:
+          - /auth/v1/verify
+    plugins:
+      - name: cors
+
+  ## Open: anything verifying a session locally reads the public keys here.
+  - name: auth-v1-open-jwks
+    _comment: "Auth: /auth/v1/.well-known/jwks.json -> http://auth:9999/.well-known/jwks.json"
+    url: http://auth:9999/.well-known/jwks.json
+    routes:
+      - name: auth-v1-open-jwks
+        strip_path: true
+        paths:
+          - /auth/v1/.well-known/jwks.json
+    plugins:
+      - name: cors
+
+  - name: auth-v1
+    _comment: "Auth: /auth/v1/* -> http://auth:9999/*"
+    url: http://auth:9999/
+    routes:
+      - name: auth-v1-all
+        strip_path: true
+        paths:
+          - /auth/v1/
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - "Authorization: $((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or (headers.apikey == '{{SECRET_KEY}}' and 'Bearer {{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (headers.apikey == '{{PUBLISHABLE_KEY}}' and 'Bearer {{ANON_KEY_ASYMMETRIC}}') or headers.apikey)"
+          replace:
+            headers:
+              - "Authorization: $((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or (headers.apikey == '{{SECRET_KEY}}' and 'Bearer {{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (headers.apikey == '{{PUBLISHABLE_KEY}}' and 'Bearer {{ANON_KEY_ASYMMETRIC}}') or headers.apikey)"
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  ## Accounts, DMs, backups and the directory, under the policies in 007.
+  - name: rest-v1
+    _comment: "PostgREST: /rest/v1/* -> http://rest:3000/*"
+    url: http://rest:3000/
+    routes:
+      - name: rest-v1-all
+        strip_path: true
+        paths:
+          - /rest/v1/
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - "Authorization: $((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or (headers.apikey == '{{SECRET_KEY}}' and 'Bearer {{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (headers.apikey == '{{PUBLISHABLE_KEY}}' and 'Bearer {{ANON_KEY_ASYMMETRIC}}') or headers.apikey)"
+          replace:
+            headers:
+              - "Authorization: $((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or (headers.apikey == '{{SECRET_KEY}}' and 'Bearer {{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (headers.apikey == '{{PUBLISHABLE_KEY}}' and 'Bearer {{ANON_KEY_ASYMMETRIC}}') or headers.apikey)"
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  - name: realtime-v1-ws
+    _comment: "Realtime: /realtime/v1/* -> ws://realtime:4000/socket/*"
+    url: http://realtime-dev.central-realtime:4000/socket
+    protocol: ws
+    routes:
+      - name: realtime-v1-ws
+        strip_path: true
+        paths:
+          - /realtime/v1/
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - "x-api-key:$((query_params.apikey == '{{SECRET_KEY}}' and '{{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (query_params.apikey == '{{PUBLISHABLE_KEY}}' and '{{ANON_KEY_ASYMMETRIC}}') or query_params.apikey)"
+          replace:
+            querystring:
+              - "apikey:$((query_params.apikey == '{{SECRET_KEY}}' and '{{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (query_params.apikey == '{{PUBLISHABLE_KEY}}' and '{{ANON_KEY_ASYMMETRIC}}') or query_params.apikey)"
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  - name: realtime-v1-rest
+    _comment: "Realtime: /realtime/v1/api/* -> http://realtime:4000/api/*"
+    url: http://realtime-dev.central-realtime:4000/api
+    protocol: http
+    routes:
+      - name: realtime-v1-rest
+        strip_path: true
+        paths:
+          - /realtime/v1/api
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - "Authorization: $((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or (headers.apikey == '{{SECRET_KEY}}' and 'Bearer {{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (headers.apikey == '{{PUBLISHABLE_KEY}}' and 'Bearer {{ANON_KEY_ASYMMETRIC}}') or headers.apikey)"
+          replace:
+            headers:
+              - "Authorization: $((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or (headers.apikey == '{{SECRET_KEY}}' and 'Bearer {{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (headers.apikey == '{{PUBLISHABLE_KEY}}' and 'Bearer {{ANON_KEY_ASYMMETRIC}}') or headers.apikey)"
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  ## DM attachments, vault backups and directory icons. No key-auth: a presigned URL carries its signature in the
+  ## query string and no apikey header at all, and the post-function below drops
+  ## the empty Authorization the transformer would otherwise leave behind.
+  - name: storage-v1
+    _comment: "Storage: /storage/v1/* -> http://storage:5000/*"
+    url: http://storage:5000/
+    routes:
+      - name: storage-v1-all
+        strip_path: true
+        paths:
+          - /storage/v1/
+    plugins:
+      - name: cors
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - "Authorization: $((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or (headers.apikey == '{{SECRET_KEY}}' and 'Bearer {{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (headers.apikey == '{{PUBLISHABLE_KEY}}' and 'Bearer {{ANON_KEY_ASYMMETRIC}}') or headers.apikey)"
+          replace:
+            headers:
+              - "Authorization: $((headers.authorization ~= nil and headers.authorization:sub(1, 10) ~= 'Bearer sb_' and headers.authorization) or (headers.apikey == '{{SECRET_KEY}}' and 'Bearer {{SERVICE_ROLE_KEY_ASYMMETRIC}}') or (headers.apikey == '{{PUBLISHABLE_KEY}}' and 'Bearer {{ANON_KEY_ASYMMETRIC}}') or headers.apikey)"
+      - name: post-function
+        config:
+          access:
+            - |
+                local auth = kong.request.get_header("authorization")
+                if auth == nil or auth == "" or auth:find("^%s*$") then
+                  kong.service.request.clear_header("authorization")
+                end

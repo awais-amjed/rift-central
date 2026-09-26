@@ -28,6 +28,7 @@ supabase/functions/         edge functions: publish_server, push_send
 relay/                      the push relay's hosts — Node, Cloudflare, or the function
 scripts/db_test.sh          runs the policy tests against a scratch database
 scripts/add_admin.sh        creates or removes a moderator account
+stack/                      central self-hosted: compose, secrets, `up.sh`
 ```
 
 `supabase/functions/` rather than `functions/` because that is the layout the
@@ -114,6 +115,17 @@ Rift account becoming one and stops one claiming a handle. Every moderation
 function also requires the session's second factor (`aal2`), so the admin site
 makes a new moderator set up an authenticator app on first sign-in, and a
 password alone reaches nothing.
+
+**Five wrong codes lock the second factor for fifteen minutes**, the right
+code included, and sign the account out everywhere. Supabase Auth's own limit
+on code checks is per IP address (15 a minute, fixed), so a password and
+enough addresses would otherwise make a six-digit code guessable in hours. The
+count is per account, kept by `hook_mfa_verification_attempt` (002), which
+Supabase Auth calls on every code. **The managed service offers that hook only
+on its Team plan and above**, so on the hosted project the function exists and
+is never called; on the self-hosted stack (`stack/`) it is on. Somebody holding
+the password can keep the real moderator locked out — the answer to that is a
+new password.
 
 Adding or removing one:
 
@@ -314,6 +326,33 @@ a dead host an hour of work instead of a catastrophe.
 Prices here are September 2026 and this tier repriced at least twice during the
 year — Hetzner in June, Leaseweb in August, Netcup across its G12.5 line.
 Treat every figure above as needing a check rather than a quote.
+
+## Running central yourself
+
+`stack/` is central as containers — Postgres, Supabase Auth, PostgREST,
+Realtime, Storage and Kong, upstream images at the versions `rift-self-host`
+pins — for the VPS it is moving to, and for testing locally before then.
+
+```bash
+./stack/up.sh     # first run generates stack/.env; every run applies the migrations
+```
+
+It listens on `127.0.0.1:28000`. `stack/setup.py` writes the secrets to
+`stack/.env` and Kong's config to `stack/volumes/api/kong.yml`, both mode 600
+and both gitignored; the publishable and secret keys for clients and scripts
+are in that `.env`. Applying every migration on every run is deliberate: each
+file states its final shape and is safe to re-run, which is how the hosted
+project has been kept current too.
+
+Proved locally on 26 September 2026: all seven migrations apply to it, twice;
+moderator sign-in with a second factor works from `rift-admin`; the lockout
+above locks and lifts.
+
+**Not in it yet**, and each is needed before it replaces the hosted project:
+the three edge functions and their Kong route, TLS in front (Caddy, as
+`rift-self-host` does), SMTP for confirmation mail (`SMTP_*` and
+`MAILER_AUTOCONFIRM=false` in `.env`), off-box backups, and `add_admin.sh`,
+which still talks to the hosted project's Management API.
 
 ## Bringing up a project from nothing
 
