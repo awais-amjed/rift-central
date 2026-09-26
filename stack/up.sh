@@ -14,7 +14,23 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 # file does. So what they last loaded is recorded, and they are restarted
 # when setup.py has rendered something different, whoever ran it.
 python3 setup.py
-docker compose up -d --wait
+
+# Realtime's seed writes its tenant row, and on every later boot would reset
+# that row's limits to the free tier's (see rift-self-host's compose file). So
+# it runs only while the database has no tenant — which is a fact about the
+# database, not about .env: a machine restored from backup has the same .env
+# as the old one and an empty database. So ask the database.
+docker compose up -d --wait db
+tenants=$(docker exec central-db psql -U supabase_admin -d postgres -tAc \
+  "select count(*) from _realtime.tenants" 2>/dev/null || echo 0)
+if [[ $tenants == 0 ]]; then
+  REALTIME_SEED=true docker compose up -d --wait
+  # And straight back off, now that the row exists.
+  docker compose up -d --wait realtime >/dev/null
+  echo "seeded Realtime's tenant"
+else
+  docker compose up -d --wait
+fi
 # A profile that is off does not stop what it started; back on a local stack,
 # Caddy would keep holding 80 and 443.
 if ! grep -q "^COMPOSE_PROFILES='tls'" .env; then
@@ -58,14 +74,6 @@ env_value() { sed -n "s/^$1='\(.*\)'\$/\1/p" .env; }
   fi
 } | docker exec -i central-db psql -U postgres -q -v ON_ERROR_STOP=1 >/dev/null
 echo "wrote the function config rows"
-
-# Realtime's seed writes its tenant row, and on every later boot would reset
-# that row's limits to the free tier's (see rift-self-host's compose file). So
-# it runs once: the row exists now, and the next boot must leave it alone.
-if grep -q "^REALTIME_SEED='true'" .env; then
-  sed -i "s/^REALTIME_SEED='true'/REALTIME_SEED='false'/" .env
-  docker compose up -d --wait realtime >/dev/null
-fi
 
 echo "Central is up on $(env_value API_EXTERNAL_URL)"
 if [[ -z $(env_value FCM_SERVICE_ACCOUNT) ]]; then

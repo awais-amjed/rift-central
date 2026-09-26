@@ -211,7 +211,7 @@ services:
       APP_NAME: realtime
       RUN_JANITOR: "true"
       DISABLE_HEALTHCHECK_LOGGING: "true"
-      # On for the first boot only; up.sh turns it off once the tenant exists.
+      # On only while the database has no tenant; up.sh decides.
       SEED_SELF_HOST: ${REALTIME_SEED:-false}
 
   storage:

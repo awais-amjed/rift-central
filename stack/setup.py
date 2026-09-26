@@ -115,7 +115,6 @@ def defaults() -> dict:
         "JWT_EXPIRY": "3600",
         "SECRET_KEY_BASE": random_string(64),
         "REALTIME_DB_ENC_KEY": random_string(16),
-        "REALTIME_SEED": "true",
         # The two secrets the database sends to its own functions (the
         # config rows up.sh writes); the functions check them.
         "PUSH_SECRET": random_string(48),

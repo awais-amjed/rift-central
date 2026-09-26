@@ -67,7 +67,9 @@ restarted if their rendered config changed.
   addressed to the functions on the internal network. Push's row is written
   only when there is a Firebase key: without one, `push_send` cannot start,
   and a missing row makes a DM ring nobody instead of failing.
-- **Turns off Realtime's seed** after the first boot, as rift-self-host does.
+- **Seeds Realtime's tenant** only when the database has none — a fresh stack,
+  or a new machine restoring from backup — and never again after, as
+  rift-self-host explains.
 
 ## Checking it
 
