@@ -487,7 +487,7 @@ repository is something a self-hoster runs.
 
 ## Where this sits
 
-Rift is five repositories, meant to be cloned as siblings.
+Rift is six repositories, meant to be cloned as siblings.
 
 | Repo | Holds |
 |---|---|
@@ -495,4 +495,5 @@ Rift is five repositories, meant to be cloned as siblings.
 | `rift-self-host` | a server's schema, endpoints and console — anyone runs one |
 | `rift-central` | accounts, the public directory, the push relay — we run it |
 | `rift-bot-sdk` | the TypeScript bot SDK |
+| `rift-admin` | the moderation dashboard — its own site and accounts |
 | `rift-website` | joinrift.app, and the self-hosting docs |
