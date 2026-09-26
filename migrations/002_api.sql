@@ -1423,14 +1423,17 @@ BEGIN
 END; $$;
 
 -- One listing as the moderation page draws it: what it says now, who
--- published it, and whether they are banned.
+-- published it, and whether they are banned. `seed` is what the browser
+-- colours a listing's fallback icon from, so a listing without a picture
+-- looks the same on the moderation page as it does in the directory.
 CREATE OR REPLACE FUNCTION moderation_listing(p_kind TEXT, p_listing UUID)
   RETURNS JSONB
   LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT CASE p_kind
     WHEN 'server' THEN (
       SELECT jsonb_build_object(
-               'kind', 'server', 'id', s.id, 'name', s.name,
+               'kind', 'server', 'id', s.id, 'seed', s.server_id,
+               'name', s.name,
                'description', s.description, 'icon_path', s.icon_path,
                'address', s.supabase_url, 'is_listed', s.is_listed,
                'hidden_at', s.hidden_at, 'hidden_reason', s.hidden_reason,
@@ -1441,7 +1444,7 @@ CREATE OR REPLACE FUNCTION moderation_listing(p_kind TEXT, p_listing UUID)
        WHERE s.id = p_listing)
     ELSE (
       SELECT jsonb_build_object(
-               'kind', 'bot', 'id', b.id, 'name', b.name,
+               'kind', 'bot', 'id', b.id, 'seed', b.id, 'name', b.name,
                'description', b.description, 'icon_path', b.icon_path,
                'address', b.source_url, 'is_listed', b.is_listed,
                'hidden_at', b.hidden_at, 'hidden_reason', b.hidden_reason,
