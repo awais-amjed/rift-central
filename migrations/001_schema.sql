@@ -232,6 +232,13 @@ CREATE TABLE IF NOT EXISTS public_servers (
   -- same act as giving up its listing.
   is_listed    BOOLEAN     NOT NULL DEFAULT TRUE,
 
+  -- Taken out of the browser by a central moderator, and why — see
+  -- "Moderating the directory" below. Separate from `is_listed` because the
+  -- two belong to different people: the owner delists and relists at will,
+  -- and republishing must not be a way to undo a moderator.
+  hidden_at     TIMESTAMPTZ,
+  hidden_reason TEXT        CHECK (length(hidden_reason) <= 300),
+
   UNIQUE (supabase_url, server_id)
 );
 
@@ -331,6 +338,10 @@ CREATE TABLE IF NOT EXISTS public_bots (
   -- exactly as it does for a server.
   is_listed    BOOLEAN     NOT NULL DEFAULT TRUE,
 
+  -- A moderator's, exactly as on `public_servers`.
+  hidden_at     TIMESTAMPTZ,
+  hidden_reason TEXT        CHECK (length(hidden_reason) <= 300),
+
   -- Denormalised from `bot_likes`, maintained by trigger (003). Ordering is
   -- the whole point of the count, and `ORDER BY (SELECT count(*) ...)` cannot
   -- use an index — every browse would count every like of every bot.
@@ -388,6 +399,18 @@ BEGIN
 
   ALTER TABLE public_bots    DROP COLUMN IF EXISTS icon_url;
   ALTER TABLE public_servers DROP COLUMN IF EXISTS icon_url;
+
+  ALTER TABLE public_servers ADD COLUMN IF NOT EXISTS hidden_at     TIMESTAMPTZ;
+  ALTER TABLE public_servers ADD COLUMN IF NOT EXISTS hidden_reason TEXT;
+  ALTER TABLE public_bots    ADD COLUMN IF NOT EXISTS hidden_at     TIMESTAMPTZ;
+  ALTER TABLE public_bots    ADD COLUMN IF NOT EXISTS hidden_reason TEXT;
+
+  ALTER TABLE public_servers DROP CONSTRAINT IF EXISTS public_servers_hidden_reason_check;
+  ALTER TABLE public_servers ADD  CONSTRAINT public_servers_hidden_reason_check
+    CHECK (length(hidden_reason) <= 300);
+  ALTER TABLE public_bots    DROP CONSTRAINT IF EXISTS public_bots_hidden_reason_check;
+  ALTER TABLE public_bots    ADD  CONSTRAINT public_bots_hidden_reason_check
+    CHECK (length(hidden_reason) <= 300);
 END $$;
 
 -- ---------- likes ----------
@@ -424,6 +447,93 @@ CREATE TABLE IF NOT EXISTS bot_likes (
 -- "Which of these have I liked" for the page on screen — the primary key is
 -- the wrong way round for that.
 CREATE INDEX IF NOT EXISTS idx_bot_likes_user ON bot_likes (user_id);
+
+-- ============================================================
+-- Moderating the directory
+-- ============================================================
+-- Everything else central stores is ciphertext, and nobody can moderate what
+-- nobody can read — that is the point of it. The directory is the exception:
+-- names, descriptions and icons written by strangers, in plaintext, served to
+-- everyone who browses. And it is served from the same address as accounts,
+-- DMs and backups, on a host whose first answer to an abuse report is to cut
+-- that address off. So one listing nobody can take down is one report away
+-- from taking down everything else, and the directory cannot open without a
+-- way to take one down.
+--
+-- Three pieces: people report, a moderator hides, and an account that keeps
+-- publishing what gets hidden can be stopped from publishing at all.
+--
+-- **Hiding, not deleting.** The listing stays, its owner still sees it and
+-- the reason, and a moderator can put it back. Deleting would be final for a
+-- mistake and would tell the owner nothing. Hiding does take the icon away
+-- (the nightly sweep then deletes the bytes), because the picture is the part
+-- most likely to be the problem and the part a hidden row would otherwise
+-- keep serving to anyone who still had its path.
+
+-- Who may moderate. Written by hand in SQL, never by a client: there is no
+-- grant on it at all, and `is_central_admin()` (002) is the only reader.
+CREATE TABLE IF NOT EXISTS central_admins (
+  user_id    UUID        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- An account that may no longer publish, and why. Its own table rather than a
+-- column on `users`, because that row is readable by everyone signed in and a
+-- moderation flag there would be a public badge.
+CREATE TABLE IF NOT EXISTS directory_bans (
+  user_id    UUID        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  banned_by  UUID        REFERENCES users(id) ON DELETE SET NULL,
+  reason     TEXT        CHECK (length(reason) <= 300)
+);
+
+-- One person's report of one listing.
+--
+-- A reason from a short fixed list, so the queue can be sorted by how bad a
+-- thing is claimed to be, and optional words for what the list cannot say.
+-- `snapshot` is the name and description as they were when reported: an
+-- owner who notices can edit the listing clean, and the moderator should
+-- still see what was reported.
+--
+-- The listing is a foreign key that cascades. A listing its owner deletes has
+-- left the directory already, which is all a report asks for.
+CREATE TABLE IF NOT EXISTS directory_reports (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reporter_id       UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_listing_id UUID        REFERENCES public_servers(id) ON DELETE CASCADE,
+  bot_listing_id    UUID        REFERENCES public_bots(id)    ON DELETE CASCADE,
+  reason            TEXT        NOT NULL CHECK (reason IN (
+                                  'illegal', 'sexual', 'violence', 'hate',
+                                  'scam', 'spam', 'other')),
+  details           TEXT        CHECK (length(details) <= 500),
+  snapshot          JSONB       NOT NULL DEFAULT '{}',
+  -- Set when a moderator acts: 'hidden' if the listing came down, 'dismissed'
+  -- if it stayed up.
+  resolved_at       TIMESTAMPTZ,
+  resolution        TEXT        CHECK (resolution IN ('hidden', 'dismissed')),
+  resolved_by       UUID        REFERENCES users(id) ON DELETE SET NULL,
+
+  CHECK ((server_listing_id IS NULL) <> (bot_listing_id IS NULL))
+);
+
+-- One open report per person per listing. Reporting again while the first is
+-- waiting updates it rather than adding weight: the queue counts people, not
+-- presses.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_directory_reports_open_server
+  ON directory_reports (reporter_id, server_listing_id)
+  WHERE resolved_at IS NULL AND server_listing_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_directory_reports_open_bot
+  ON directory_reports (reporter_id, bot_listing_id)
+  WHERE resolved_at IS NULL AND bot_listing_id IS NOT NULL;
+
+-- The moderator's queue: what is still open, oldest first.
+CREATE INDEX IF NOT EXISTS idx_directory_reports_open
+  ON directory_reports (created_at) WHERE resolved_at IS NULL;
+
+-- The per-account daily ceiling counts a reporter's recent rows.
+CREATE INDEX IF NOT EXISTS idx_directory_reports_reporter
+  ON directory_reports (reporter_id, created_at DESC);
 
 -- ============================================================
 -- Push notifications

@@ -2020,4 +2020,312 @@ END $$;
 
 SET LOCAL ROLE authenticated;
 
+-- ============================================================
+-- 21. Moderating the directory
+-- ============================================================
+-- Reports go in through one function and come out only to moderators; a
+-- hidden listing leaves everyone's browse but its owner's and a moderator's;
+-- and a banned account cannot publish its way back.
+
+RESET ROLE;
+INSERT INTO auth.users (id) VALUES
+  ('cccc0000-0000-4000-8000-0000000000e1'),  -- mod_erin, a moderator
+  ('cccc0000-0000-4000-8000-0000000000f1');  -- mod_frank, another
+INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+  ('cccc0000-0000-4000-8000-0000000000e1', 'mod_erin',  'chat-erin',  'sign-erin'),
+  ('cccc0000-0000-4000-8000-0000000000f1', 'mod_frank', 'chat-frank', 'sign-frank');
+INSERT INTO central_admins (user_id) VALUES
+  ('cccc0000-0000-4000-8000-0000000000e1'),
+  ('cccc0000-0000-4000-8000-0000000000f1');
+
+-- Alice's: a listed server with an icon, a listed bot, and a delisted server.
+INSERT INTO public_servers (id, owner_id, supabase_url, server_id, invite_code,
+                            name, icon_path, is_listed) VALUES
+  ('dddd0000-0000-4000-8000-000000000001', 'cccc0000-0000-4000-8000-000000000001',
+   'https://mod.supabase.co', 'dddd0000-0000-4000-8000-0000000000a1', 'code',
+   'Bad Place', 'cccc0000-0000-4000-8000-000000000001/icon', TRUE),
+  ('dddd0000-0000-4000-8000-000000000002', 'cccc0000-0000-4000-8000-000000000001',
+   'https://mod2.supabase.co', 'dddd0000-0000-4000-8000-0000000000a2', 'code',
+   'Quiet Place', NULL, FALSE);
+INSERT INTO public_bots (id, owner_id, name, source_url) VALUES
+  ('dddd0000-0000-4000-8000-000000000003', 'cccc0000-0000-4000-8000-000000000001',
+   'badbot', 'https://example.com/badbot');
+SET LOCAL ROLE authenticated;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  PERFORM report_listing('server', 'dddd0000-0000-4000-8000-000000000001',
+                         'hate', 'the name');
+  -- Again, with a different reason: the first is replaced, not joined.
+  PERFORM report_listing('server', 'dddd0000-0000-4000-8000-000000000001',
+                         'illegal', '  ');
+  PERFORM report_listing('bot', 'dddd0000-0000-4000-8000-000000000003',
+                         'scam', NULL);
+
+  BEGIN
+    PERFORM 1 FROM directory_reports;
+    RAISE EXCEPTION 'FAIL: a member can read the reports';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  -- A delisted listing is invisible to bob, and reporting must not prove it
+  -- exists.
+  BEGIN
+    PERFORM report_listing('server', 'dddd0000-0000-4000-8000-000000000002',
+                           'spam', NULL);
+    RAISE EXCEPTION 'FAIL: a delisted listing could be reported by a stranger';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'listing_not_found' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM report_listing('channel', 'dddd0000-0000-4000-8000-000000000001',
+                           'spam', NULL);
+    RAISE EXCEPTION 'FAIL: an unknown listing kind was accepted';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'unknown_listing_kind' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM report_listing('server', 'dddd0000-0000-4000-8000-000000000001',
+                           'because', NULL);
+    RAISE EXCEPTION 'FAIL: a reason off the list was accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  IF is_central_admin() THEN
+    RAISE EXCEPTION 'FAIL: a member reads as a moderator';
+  END IF;
+  BEGIN
+    PERFORM moderation_queue();
+    RAISE EXCEPTION 'FAIL: a member read the moderation queue';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM moderation_set_hidden('server', 'dddd0000-0000-4000-8000-000000000001',
+                                  TRUE, 'mine now');
+    RAISE EXCEPTION 'FAIL: a member hid a listing';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  anyone can report what they can see, and nothing more';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM report_listing('server', 'dddd0000-0000-4000-8000-000000000001',
+                           'spam', NULL);
+    RAISE EXCEPTION 'FAIL: an owner reported their own listing';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'cannot_report_own_listing' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  your own listing is deleted, not reported';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE
+  v_queue JSONB;
+  v_item  JSONB;
+BEGIN
+  IF NOT is_central_admin() THEN
+    RAISE EXCEPTION 'FAIL: a moderator does not read as one';
+  END IF;
+
+  v_queue := moderation_queue();
+  IF jsonb_array_length(v_queue) <> 2 THEN
+    RAISE EXCEPTION 'FAIL: expected two listings in the queue, got %', v_queue;
+  END IF;
+  SELECT i INTO v_item FROM jsonb_array_elements(v_queue) i
+   WHERE i -> 'listing' ->> 'kind' = 'server';
+  IF (v_item ->> 'report_count')::int <> 1 THEN
+    RAISE EXCEPTION 'FAIL: a replaced report was counted twice';
+  END IF;
+  IF v_item -> 'reports' -> 0 ->> 'reason' <> 'illegal'
+     OR v_item -> 'reports' -> 0 ->> 'details' IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: the replacement did not take, or blank details were kept';
+  END IF;
+  IF v_item -> 'reports' -> 0 ->> 'reporter_handle' <> 'bob_test'
+     OR v_item -> 'listing' ->> 'owner_handle' <> 'alice_test' THEN
+    RAISE EXCEPTION 'FAIL: the queue does not say who reported whom';
+  END IF;
+  -- A moderator sees a delisted listing too, which a member does not.
+  IF NOT EXISTS (SELECT 1 FROM public_servers
+                  WHERE id = 'dddd0000-0000-4000-8000-000000000002') THEN
+    RAISE EXCEPTION 'FAIL: a moderator cannot see a delisted listing';
+  END IF;
+
+  PERFORM moderation_set_hidden('server', 'dddd0000-0000-4000-8000-000000000001',
+                                TRUE, 'Hateful name');
+  PERFORM moderation_dismiss('bot', 'dddd0000-0000-4000-8000-000000000003');
+
+  IF jsonb_array_length(moderation_queue()) <> 0 THEN
+    RAISE EXCEPTION 'FAIL: hiding and dismissing left reports open';
+  END IF;
+  IF jsonb_array_length(moderation_hidden()) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: the hidden list does not show the one hidden listing';
+  END IF;
+  IF (SELECT icon_path FROM public_servers
+       WHERE id = 'dddd0000-0000-4000-8000-000000000001') IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: hiding kept the icon';
+  END IF;
+  RAISE NOTICE 'ok  a moderator reads the queue, hides, and dismisses';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public_servers
+              WHERE id = 'dddd0000-0000-4000-8000-000000000001') THEN
+    RAISE EXCEPTION 'FAIL: a hidden listing is still in a member''s browse';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public_bots
+                  WHERE id = 'dddd0000-0000-4000-8000-000000000003') THEN
+    RAISE EXCEPTION 'FAIL: a dismissed listing left the browse';
+  END IF;
+  -- Reporting what is already hidden asks for nothing, and files nothing:
+  -- bob can still see its id, but there is nobody left to act.
+  PERFORM report_listing('server', 'dddd0000-0000-4000-8000-000000000001',
+                         'hate', 'still bad');
+  RAISE NOTICE 'ok  hidden means gone from everyone else''s browse';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE v public_bots;
+BEGIN
+  IF (SELECT hidden_reason FROM public_servers
+       WHERE id = 'dddd0000-0000-4000-8000-000000000001') <> 'Hateful name' THEN
+    RAISE EXCEPTION 'FAIL: the owner cannot see that, and why, their listing was hidden';
+  END IF;
+  -- Republishing edits the listing and does not bring it back.
+  PERFORM publish_server('https://mod.supabase.co',
+                         'dddd0000-0000-4000-8000-0000000000a1',
+                         'code', 'Nice Place', NULL, NULL, '{}', 1, TRUE);
+  IF (SELECT hidden_at FROM public_servers
+       WHERE id = 'dddd0000-0000-4000-8000-000000000001') IS NULL THEN
+    RAISE EXCEPTION 'FAIL: republishing undid a moderator';
+  END IF;
+  v := publish_bot('dddd0000-0000-4000-8000-000000000003', 'badbot',
+                   'https://example.com/badbot', 'edited');
+  RAISE NOTICE 'ok  the owner sees why, and republishing does not undo it';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM moderation_set_banned('cccc0000-0000-4000-8000-0000000000f1', TRUE, 'x');
+    RAISE EXCEPTION 'FAIL: a moderator banned another moderator';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'cannot_ban_a_moderator' THEN RAISE; END IF;
+  END;
+
+  PERFORM moderation_set_banned('cccc0000-0000-4000-8000-000000000001', TRUE,
+                                'Repeated hateful listings');
+  IF EXISTS (SELECT 1 FROM public_bots
+              WHERE owner_id = 'cccc0000-0000-4000-8000-000000000001'
+                AND hidden_at IS NULL)
+     OR EXISTS (SELECT 1 FROM public_servers
+                 WHERE owner_id = 'cccc0000-0000-4000-8000-000000000001'
+                   AND hidden_at IS NULL) THEN
+    RAISE EXCEPTION 'FAIL: a ban left the account''s listings up';
+  END IF;
+  IF moderation_bans() -> 0 ->> 'handle' <> 'alice_test' THEN
+    RAISE EXCEPTION 'FAIL: the ban list does not show the ban';
+  END IF;
+  RAISE NOTICE 'ok  a ban takes every listing down';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM publish_bot(NULL, 'newbot', 'https://example.com/newbot');
+    RAISE EXCEPTION 'FAIL: a banned account listed a bot';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'publisher_banned' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM publish_server('https://new.supabase.co', gen_random_uuid(),
+                           'code', 'New', NULL, NULL, '{}', 0, TRUE);
+    RAISE EXCEPTION 'FAIL: a banned account listed a server';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'publisher_banned' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a banned account cannot publish';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated"}', true); END $$;
+
+DO $$
+BEGIN
+  PERFORM moderation_set_banned('cccc0000-0000-4000-8000-000000000001', FALSE);
+  IF EXISTS (SELECT 1 FROM public_bots
+              WHERE owner_id = 'cccc0000-0000-4000-8000-000000000001'
+                AND hidden_at IS NULL) THEN
+    RAISE EXCEPTION 'FAIL: lifting a ban brought listings back';
+  END IF;
+  PERFORM moderation_set_hidden('bot', 'dddd0000-0000-4000-8000-000000000003', FALSE);
+  IF (SELECT hidden_at FROM public_bots
+       WHERE id = 'dddd0000-0000-4000-8000-000000000003') IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: a listing could not be shown again';
+  END IF;
+  RAISE NOTICE 'ok  lifting a ban restores publishing, and listings come back one by one';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE
+  i   INTEGER;
+  v_q INTEGER;
+BEGIN
+  -- The ceiling is read as the owner: it is not granted, since the client
+  -- learns it by being refused rather than by counting.
+  RESET ROLE;
+  v_q := daily_report_quota();
+  INSERT INTO public_bots (owner_id, name, source_url)
+  SELECT 'cccc0000-0000-4000-8000-000000000001', 'quota' || g, 'https://example.com'
+    FROM generate_series(1, v_q + 1) g;
+  SET LOCAL ROLE authenticated;
+
+  -- Bob has filed two today already (the server and the bot above).
+  FOR i IN 1..v_q - 2 LOOP
+    PERFORM report_listing('bot', (SELECT id FROM public_bots
+                                    WHERE name = 'quota' || i), 'spam', NULL);
+  END LOOP;
+  BEGIN
+    PERFORM report_listing('bot', (SELECT id FROM public_bots
+                                    WHERE name = 'quota' || v_q),
+                           'spam', NULL);
+    RAISE EXCEPTION 'FAIL: reports past the daily ceiling were accepted';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'report_limit_reached' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  twenty reports a day';
+END $$;
+
+SET LOCAL ROLE authenticated;
+
 ROLLBACK;

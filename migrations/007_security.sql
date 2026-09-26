@@ -103,7 +103,9 @@ GRANT SELECT, DELETE ON public_servers TO authenticated;
 
 DROP POLICY IF EXISTS public_servers_select ON public_servers;
 CREATE POLICY public_servers_select ON public_servers FOR SELECT TO authenticated
-  USING (is_listed OR owner_id = auth.uid());
+  USING ((is_listed AND hidden_at IS NULL)
+         OR owner_id = auth.uid()
+         OR (SELECT is_central_admin()));
 
 DROP POLICY IF EXISTS public_servers_delete_own ON public_servers;
 CREATE POLICY public_servers_delete_own ON public_servers FOR DELETE TO authenticated
@@ -147,7 +149,9 @@ GRANT SELECT, DELETE ON public_bots TO authenticated;
 
 DROP POLICY IF EXISTS public_bots_select ON public_bots;
 CREATE POLICY public_bots_select ON public_bots FOR SELECT TO authenticated
-  USING (is_listed OR owner_id = auth.uid());
+  USING ((is_listed AND hidden_at IS NULL)
+         OR owner_id = auth.uid()
+         OR (SELECT is_central_admin()));
 
 DROP POLICY IF EXISTS public_bots_delete_own ON public_bots;
 CREATE POLICY public_bots_delete_own ON public_bots FOR DELETE TO authenticated
@@ -197,6 +201,36 @@ CREATE POLICY bot_likes_insert_own ON bot_likes FOR INSERT TO authenticated
 DROP POLICY IF EXISTS bot_likes_delete_own ON bot_likes;
 CREATE POLICY bot_likes_delete_own ON bot_likes FOR DELETE TO authenticated
   USING (user_id = auth.uid());
+
+-- ============================================================
+-- Moderating the directory
+-- ============================================================
+-- A hidden listing leaves everyone's browse by the select policies above,
+-- which still show it to its owner — so they can see that it was hidden and
+-- why — and to moderators, in a subquery so the check runs once per statement
+-- rather than once per row.
+--
+-- The three moderation tables get no grant at all. Reporting is
+-- `report_listing`, which holds the daily ceiling; everything else is a
+-- `moderation_*` function that refuses anyone not in `central_admins`. So
+-- those are granted to every signed-in account, and the check that matters is
+-- inside them — a table grant here would be a second door with no such check.
+
+REVOKE ALL ON central_admins, directory_bans, directory_reports
+  FROM anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION is_central_admin() TO authenticated;
+
+GRANT EXECUTE ON FUNCTION report_listing(TEXT, UUID, TEXT, TEXT) TO authenticated;
+
+GRANT EXECUTE ON FUNCTION moderation_queue()  TO authenticated;
+GRANT EXECUTE ON FUNCTION moderation_hidden() TO authenticated;
+GRANT EXECUTE ON FUNCTION moderation_bans()   TO authenticated;
+GRANT EXECUTE ON FUNCTION moderation_set_hidden(TEXT, UUID, BOOLEAN, TEXT)
+  TO authenticated;
+GRANT EXECUTE ON FUNCTION moderation_dismiss(TEXT, UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION moderation_set_banned(UUID, BOOLEAN, TEXT)
+  TO authenticated;
 
 DROP POLICY IF EXISTS device_tokens_own ON device_tokens;
 CREATE POLICY device_tokens_own ON device_tokens FOR ALL TO authenticated
@@ -461,6 +495,14 @@ ALTER TABLE public_servers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public_bots ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE bot_likes   ENABLE ROW LEVEL SECURITY;
+
+-- No policies on these three, so RLS alone refuses every direct read and
+-- write; the moderation functions reach them as definer.
+ALTER TABLE central_admins    ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE directory_bans    ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE directory_reports ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE device_tokens ENABLE ROW LEVEL SECURITY;
 

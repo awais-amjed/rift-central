@@ -148,6 +148,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM users WHERE id = auth.uid()) THEN
     RAISE EXCEPTION 'owner_has_no_profile';
   END IF;
+  -- A moderator stopped this account publishing (see "Moderating the
+  -- directory" below). Editing what it already has is refused too: those
+  -- listings were hidden with the ban, and an edit is how one would come back.
+  IF EXISTS (SELECT 1 FROM directory_bans WHERE user_id = auth.uid()) THEN
+    RAISE EXCEPTION 'publisher_banned';
+  END IF;
 
   SELECT owner_id INTO v_owner FROM public_servers
    WHERE supabase_url = p_supabase_url AND server_id = p_server_id;
@@ -230,6 +236,12 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM users WHERE id = auth.uid()) THEN
     RAISE EXCEPTION 'owner_has_no_profile';
+  END IF;
+  -- A moderator stopped this account publishing (see "Moderating the
+  -- directory" below). Editing what it already has is refused too: those
+  -- listings were hidden with the ban, and an edit is how one would come back.
+  IF EXISTS (SELECT 1 FROM directory_bans WHERE user_id = auth.uid()) THEN
+    RAISE EXCEPTION 'publisher_banned';
   END IF;
 
   IF p_id IS NULL THEN
@@ -874,6 +886,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_owner) THEN
     RAISE EXCEPTION 'owner_has_no_profile';
   END IF;
+  IF EXISTS (SELECT 1 FROM directory_bans WHERE user_id = p_owner) THEN
+    RAISE EXCEPTION 'publisher_banned';
+  END IF;
 
   SELECT owner_id INTO v_owner FROM public_servers
    WHERE supabase_url = p_supabase_url AND server_id = p_server_id;
@@ -1279,3 +1294,341 @@ COMMENT ON FUNCTION set_pinned(BIGINT, BOOLEAN) IS
   'Pin or unpin a DM, for either of the two while they are friends '
   '(not_friends otherwise). Fifty per conversation; the fifty-first raises '
   'pin_limit. Rings dm_pin on both sides.';
+
+-- ============================================================
+-- Moderating the directory
+-- ============================================================
+-- Reporting is for everyone signed in; everything after that is for the
+-- accounts in `central_admins`. The tables and the reasons for hiding rather
+-- than deleting are in 001.
+--
+-- All SECURITY DEFINER: none of these tables has a grant, so these functions
+-- are the only way to reach them, and each one checks who is asking before it
+-- does anything.
+
+-- Whether the caller moderates the directory. The app asks, to decide whether
+-- to show the moderation page at all, and the select policies on both listing
+-- tables ask, so a moderator can see what is hidden.
+CREATE OR REPLACE FUNCTION is_central_admin() RETURNS BOOLEAN
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (SELECT 1 FROM central_admins WHERE user_id = auth.uid())
+$$;
+
+-- How many reports one account may file per rolling day. Enough for anyone
+-- reporting what they come across; not enough to flood the queue.
+CREATE OR REPLACE FUNCTION daily_report_quota() RETURNS INTEGER
+  LANGUAGE sql IMMUTABLE AS $$ SELECT 20 $$;
+
+-- [p_kind] is 'server' or 'bot' in all of these: one function per action
+-- rather than one per action per table, because the two directories are
+-- moderated the same way even though they are published differently.
+CREATE OR REPLACE FUNCTION assert_listing_kind(p_kind TEXT) RETURNS VOID
+  LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  IF p_kind IS NULL OR p_kind NOT IN ('server', 'bot') THEN
+    RAISE EXCEPTION 'unknown_listing_kind';
+  END IF;
+END; $$;
+
+-- ---------- reporting ----------
+-- Report a listing you can see. Reporting the same one again while your first
+-- report is still open replaces it, so a change of mind is not a second vote.
+-- Your own listing cannot be reported — the way to take it down is to delete
+-- it — and a listing that is already hidden accepts the report silently,
+-- since there is nothing left for it to ask for.
+CREATE OR REPLACE FUNCTION report_listing(
+  p_kind    TEXT,
+  p_listing UUID,
+  p_reason  TEXT,
+  p_details TEXT DEFAULT NULL
+) RETURNS VOID
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_owner    UUID;
+  v_listed   BOOLEAN;
+  v_hidden   TIMESTAMPTZ;
+  v_snapshot JSONB;
+  v_details  TEXT := NULLIF(btrim(p_details), '');
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'not_authenticated';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = auth.uid()) THEN
+    RAISE EXCEPTION 'reporter_has_no_profile';
+  END IF;
+  PERFORM assert_listing_kind(p_kind);
+
+  IF p_kind = 'server' THEN
+    SELECT owner_id, is_listed, hidden_at,
+           jsonb_build_object('name', name, 'description', description,
+                              'icon_path', icon_path)
+      INTO v_owner, v_listed, v_hidden, v_snapshot
+      FROM public_servers WHERE id = p_listing;
+  ELSE
+    SELECT owner_id, is_listed, hidden_at,
+           jsonb_build_object('name', name, 'description', description,
+                              'icon_path', icon_path, 'source_url', source_url)
+      INTO v_owner, v_listed, v_hidden, v_snapshot
+      FROM public_bots WHERE id = p_listing;
+  END IF;
+
+  -- A delisted row is as good as absent to anybody but its owner, and this
+  -- must not become a way to learn that one exists.
+  IF v_owner IS NULL OR (NOT v_listed AND v_owner <> auth.uid()) THEN
+    RAISE EXCEPTION 'listing_not_found';
+  END IF;
+  IF v_owner = auth.uid() THEN
+    RAISE EXCEPTION 'cannot_report_own_listing';
+  END IF;
+  IF v_hidden IS NOT NULL THEN
+    RETURN;
+  END IF;
+
+  IF (SELECT count(*) FROM directory_reports
+       WHERE reporter_id = auth.uid()
+         AND created_at > now() - INTERVAL '1 day') >= daily_report_quota() THEN
+    RAISE EXCEPTION 'report_limit_reached';
+  END IF;
+
+  UPDATE directory_reports
+     SET reason = p_reason, details = v_details, snapshot = v_snapshot,
+         created_at = now()
+   WHERE reporter_id = auth.uid() AND resolved_at IS NULL
+     AND (CASE p_kind WHEN 'server' THEN server_listing_id
+                      ELSE bot_listing_id END) = p_listing;
+  IF FOUND THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO directory_reports (reporter_id, server_listing_id, bot_listing_id,
+                                 reason, details, snapshot)
+  VALUES (auth.uid(),
+          CASE WHEN p_kind = 'server' THEN p_listing END,
+          CASE WHEN p_kind = 'bot'    THEN p_listing END,
+          p_reason, v_details, v_snapshot);
+END; $$;
+
+COMMENT ON FUNCTION report_listing(TEXT, UUID, TEXT, TEXT) IS
+  'Report a server or bot listing to the directory''s moderators. One open '
+  'report per person per listing; a second replaces the first. Twenty a day.';
+
+-- ---------- the moderator's side ----------
+
+CREATE OR REPLACE FUNCTION assert_central_admin() RETURNS VOID
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT is_central_admin() THEN
+    RAISE EXCEPTION 'not_a_moderator';
+  END IF;
+END; $$;
+
+-- One listing as the moderation page draws it: what it says now, who
+-- published it, and whether they are banned.
+CREATE OR REPLACE FUNCTION moderation_listing(p_kind TEXT, p_listing UUID)
+  RETURNS JSONB
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE p_kind
+    WHEN 'server' THEN (
+      SELECT jsonb_build_object(
+               'kind', 'server', 'id', s.id, 'name', s.name,
+               'description', s.description, 'icon_path', s.icon_path,
+               'address', s.supabase_url, 'is_listed', s.is_listed,
+               'hidden_at', s.hidden_at, 'hidden_reason', s.hidden_reason,
+               'owner_id', s.owner_id, 'owner_handle', u.handle,
+               'owner_banned', EXISTS (SELECT 1 FROM directory_bans b
+                                        WHERE b.user_id = s.owner_id))
+        FROM public_servers s JOIN users u ON u.id = s.owner_id
+       WHERE s.id = p_listing)
+    ELSE (
+      SELECT jsonb_build_object(
+               'kind', 'bot', 'id', b.id, 'name', b.name,
+               'description', b.description, 'icon_path', b.icon_path,
+               'address', b.source_url, 'is_listed', b.is_listed,
+               'hidden_at', b.hidden_at, 'hidden_reason', b.hidden_reason,
+               'owner_id', b.owner_id, 'owner_handle', u.handle,
+               'owner_banned', EXISTS (SELECT 1 FROM directory_bans d
+                                        WHERE d.user_id = b.owner_id))
+        FROM public_bots b JOIN users u ON u.id = b.owner_id
+       WHERE b.id = p_listing)
+  END
+$$;
+
+-- The queue: every listing with an open report, most-reported first, each
+-- with its reports newest first. Grouped by listing because that is the unit
+-- a moderator acts on — ten reports of one server are one decision.
+CREATE OR REPLACE FUNCTION moderation_queue() RETURNS JSONB
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_out JSONB;
+BEGIN
+  PERFORM assert_central_admin();
+
+  WITH open AS (
+    SELECT r.*,
+           CASE WHEN r.server_listing_id IS NOT NULL THEN 'server' ELSE 'bot' END
+             AS kind,
+           COALESCE(r.server_listing_id, r.bot_listing_id) AS listing_id
+      FROM directory_reports r
+     WHERE r.resolved_at IS NULL
+  ), grouped AS (
+    SELECT o.kind, o.listing_id,
+           count(*) AS n,
+           max(o.created_at) AS latest,
+           jsonb_agg(jsonb_build_object(
+             'id', o.id, 'created_at', o.created_at, 'reason', o.reason,
+             'details', o.details, 'snapshot', o.snapshot,
+             'reporter_handle', u.handle)
+             ORDER BY o.created_at DESC) AS reports
+      FROM open o JOIN users u ON u.id = o.reporter_id
+     GROUP BY o.kind, o.listing_id
+  )
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'listing', moderation_listing(g.kind, g.listing_id),
+           'report_count', g.n,
+           'reports', g.reports)
+           ORDER BY g.n DESC, g.latest DESC), '[]'::jsonb)
+    INTO v_out
+    FROM grouped g;
+  RETURN v_out;
+END; $$;
+
+-- What is hidden now, newest first, so a mistake can be found and undone.
+CREATE OR REPLACE FUNCTION moderation_hidden() RETURNS JSONB
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_out JSONB;
+BEGIN
+  PERFORM assert_central_admin();
+
+  SELECT COALESCE(jsonb_agg(moderation_listing(h.kind, h.id)
+                            ORDER BY h.hidden_at DESC), '[]'::jsonb)
+    INTO v_out
+    FROM (SELECT 'server' AS kind, id, hidden_at FROM public_servers
+           WHERE hidden_at IS NOT NULL
+          UNION ALL
+          SELECT 'bot', id, hidden_at FROM public_bots
+           WHERE hidden_at IS NOT NULL) h;
+  RETURN v_out;
+END; $$;
+
+-- Accounts that may not publish, newest first.
+CREATE OR REPLACE FUNCTION moderation_bans() RETURNS JSONB
+  LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_out JSONB;
+BEGIN
+  PERFORM assert_central_admin();
+
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'user_id', b.user_id, 'handle', u.handle,
+           'created_at', b.created_at, 'reason', b.reason,
+           'banned_by_handle', m.handle)
+           ORDER BY b.created_at DESC), '[]'::jsonb)
+    INTO v_out
+    FROM directory_bans b
+    JOIN users u ON u.id = b.user_id
+    LEFT JOIN users m ON m.id = b.banned_by;
+  RETURN v_out;
+END; $$;
+
+-- Hide a listing, or put it back.
+--
+-- Hiding closes every open report on it as 'hidden' and drops its icon. The
+-- reason is shown to the owner, so it should be one they can act on.
+-- Showing it again touches no report: they were answered when it was hidden.
+CREATE OR REPLACE FUNCTION moderation_set_hidden(
+  p_kind    TEXT,
+  p_listing UUID,
+  p_hidden  BOOLEAN,
+  p_reason  TEXT DEFAULT NULL
+) RETURNS VOID
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_reason TEXT := NULLIF(btrim(p_reason), '');
+BEGIN
+  PERFORM assert_central_admin();
+  PERFORM assert_listing_kind(p_kind);
+
+  IF p_kind = 'server' THEN
+    UPDATE public_servers
+       SET hidden_at     = CASE WHEN p_hidden THEN COALESCE(hidden_at, now()) END,
+           hidden_reason = CASE WHEN p_hidden THEN v_reason END,
+           icon_path     = CASE WHEN p_hidden THEN NULL ELSE icon_path END
+     WHERE id = p_listing;
+  ELSE
+    UPDATE public_bots
+       SET hidden_at     = CASE WHEN p_hidden THEN COALESCE(hidden_at, now()) END,
+           hidden_reason = CASE WHEN p_hidden THEN v_reason END,
+           icon_path     = CASE WHEN p_hidden THEN NULL ELSE icon_path END
+     WHERE id = p_listing;
+  END IF;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'listing_not_found';
+  END IF;
+
+  IF p_hidden THEN
+    UPDATE directory_reports
+       SET resolved_at = now(), resolution = 'hidden', resolved_by = auth.uid()
+     WHERE resolved_at IS NULL
+       AND (CASE p_kind WHEN 'server' THEN server_listing_id
+                        ELSE bot_listing_id END) = p_listing;
+  END IF;
+END; $$;
+
+-- Leave a listing up and close its open reports.
+CREATE OR REPLACE FUNCTION moderation_dismiss(p_kind TEXT, p_listing UUID)
+  RETURNS VOID
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  PERFORM assert_central_admin();
+  PERFORM assert_listing_kind(p_kind);
+
+  UPDATE directory_reports
+     SET resolved_at = now(), resolution = 'dismissed', resolved_by = auth.uid()
+   WHERE resolved_at IS NULL
+     AND (CASE p_kind WHEN 'server' THEN server_listing_id
+                      ELSE bot_listing_id END) = p_listing;
+END; $$;
+
+-- Stop an account publishing, or let it again.
+--
+-- A ban hides everything the account has listed, with the ban's reason, since
+-- the listings are what it was banned for. Lifting it shows nothing again:
+-- each listing comes back by hand, so lifting a ban is not a way to restore
+-- the one listing that caused it.
+CREATE OR REPLACE FUNCTION moderation_set_banned(
+  p_user   UUID,
+  p_banned BOOLEAN,
+  p_reason TEXT DEFAULT NULL
+) RETURNS VOID
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_reason TEXT := NULLIF(btrim(p_reason), '');
+  v_id     UUID;
+BEGIN
+  PERFORM assert_central_admin();
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user) THEN
+    RAISE EXCEPTION 'user_not_found';
+  END IF;
+  -- A moderator who bans themselves hides their own listings and can still
+  -- undo it, but banning another moderator is a disagreement to settle
+  -- somewhere other than here.
+  IF p_banned AND p_user <> auth.uid()
+     AND EXISTS (SELECT 1 FROM central_admins WHERE user_id = p_user) THEN
+    RAISE EXCEPTION 'cannot_ban_a_moderator';
+  END IF;
+
+  IF NOT p_banned THEN
+    DELETE FROM directory_bans WHERE user_id = p_user;
+    RETURN;
+  END IF;
+
+  INSERT INTO directory_bans (user_id, banned_by, reason)
+  VALUES (p_user, auth.uid(), v_reason)
+  ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason;
+
+  FOR v_id IN SELECT id FROM public_servers
+               WHERE owner_id = p_user AND hidden_at IS NULL LOOP
+    PERFORM moderation_set_hidden('server', v_id, TRUE, v_reason);
+  END LOOP;
+  FOR v_id IN SELECT id FROM public_bots
+               WHERE owner_id = p_user AND hidden_at IS NULL LOOP
+    PERFORM moderation_set_hidden('bot', v_id, TRUE, v_reason);
+  END LOOP;
+END; $$;
