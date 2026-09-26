@@ -47,7 +47,11 @@ esac
 [[ -n $token ]] || { echo "No Supabase CLI token in the keyring — run 'supabase login'." >&2; exit 1; }
 
 # The Management API refuses curl's default user agent (Cloudflare 1010).
-mgmt() { curl -sS -A rift-admin-script/1.0 -H "Authorization: Bearer $token" "$@"; }
+#
+# Keys go to curl as a header file on a pipe rather than as `-H` arguments: an
+# argument is readable by anyone on the machine, in `ps`, for as long as the
+# request runs. `printf` is a builtin, so it never becomes a process of its own.
+mgmt() { curl -sS -A rift-admin-script/1.0 -H @<(printf 'Authorization: Bearer %s\n' "$token") "$@"; }
 
 secret=$(mgmt "$API/api-keys?reveal=true" | python3 -c '
 import json, sys
@@ -55,7 +59,7 @@ keys = [k for k in json.load(sys.stdin) if k.get("type") == "secret"]
 print(keys[0]["api_key"] if keys else "")')
 [[ -n $secret ]] || { echo "Could not read the project's secret key." >&2; exit 1; }
 
-auth() { curl -sS -H "apikey: $secret" -H "Content-Type: application/json" "$@"; }
+auth() { curl -sS -H @<(printf 'apikey: %s\n' "$secret") -H "Content-Type: application/json" "$@"; }
 
 sql() {
   python3 -c 'import json, sys; print(json.dumps({"query": sys.stdin.read()}))' |
