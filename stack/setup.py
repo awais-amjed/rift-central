@@ -13,7 +13,8 @@ given on any run: adding `--fcm` to a running stack is `./setup.py --fcm …`
 followed by `./up.sh`.
 
 Everything written is readable by its owner only, and nothing secret is
-printed. SMTP is the one thing filled in by hand: the `SMTP_*` lines in `.env`.
+printed. Two things are filled in by hand in `.env`: SMTP (`SMTP_*`) and the
+backup bucket (`BACKUP_S3_*`).
 
 The keys are the set rift-self-host's console makes, for the same reasons
 (`console/src/setup/secrets.ts` and `signing_keys.ts` there): sessions are
@@ -126,6 +127,17 @@ def defaults() -> dict:
         "API_EXTERNAL_URL": f"http://localhost:{LOCAL_PORT}",
         "MAILER_AUTOCONFIRM": "true",
         **{key: "" for key in SMTP_KEYS},
+        # Backups (backup.sh). The bucket's address and key are filled in by
+        # hand; the password encrypts everything sent there and must be kept
+        # offline with this file — without it no backup can be read.
+        "BACKUP_S3_PROVIDER": "Cloudflare",
+        "BACKUP_S3_ENDPOINT": "",
+        "BACKUP_S3_ACCESS_KEY_ID": "",
+        "BACKUP_S3_SECRET_ACCESS_KEY": "",
+        "BACKUP_BUCKET": "rift-central-backups",
+        "BACKUP_PASSWORD": random_string(48),
+        "BACKUP_SALT": random_string(48),
+        "BACKUP_PING_URL": "",
     }
 
 
@@ -153,7 +165,7 @@ def write_env(values: dict) -> None:
         if "'" in value or "\n" in value:
             sys.exit(f"{name} cannot contain a single quote or a newline.")
     write_private(ENV, "# Central's secrets and settings, from setup.py. Never commit this file.\n"
-                  "# SMTP_* are filled in by hand; the rest is setup.py's.\n"
+                  "# SMTP_* and the BACKUP_S3_* keys are filled in by hand; the rest is setup.py's.\n"
                   + "".join(f"{k}='{v}'\n" for k, v in values.items()))
 
 

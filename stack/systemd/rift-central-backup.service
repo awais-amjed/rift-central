@@ -1,0 +1,14 @@
+# Runs stack/backup.sh once. Started by rift-central-backup.timer; installed
+# by install_backup_timer.sh, which fills in the path below.
+[Unit]
+Description=Back up Rift central to its bucket
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash @STACK@/backup.sh
+# A backup that stalls for most of an hour is stuck, not slow.
+TimeoutStartSec=45min
+Nice=10
+IOSchedulingClass=idle
