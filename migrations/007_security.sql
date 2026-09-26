@@ -107,9 +107,12 @@ CREATE POLICY public_servers_select ON public_servers FOR SELECT TO authenticate
          OR owner_id = auth.uid()
          OR (SELECT is_central_admin()));
 
+-- The owner may delete a listing, but not one a moderator has hidden: the
+-- server's next publish would be a fresh row with no `hidden_at`, so a delete
+-- would be how a hidden listing came back. The same holds for bots below.
 DROP POLICY IF EXISTS public_servers_delete_own ON public_servers;
 CREATE POLICY public_servers_delete_own ON public_servers FOR DELETE TO authenticated
-  USING (owner_id = auth.uid());
+  USING (owner_id = auth.uid() AND hidden_at IS NULL);
 
 -- ============================================================
 -- Function privileges
@@ -155,7 +158,7 @@ CREATE POLICY public_bots_select ON public_bots FOR SELECT TO authenticated
 
 DROP POLICY IF EXISTS public_bots_delete_own ON public_bots;
 CREATE POLICY public_bots_delete_own ON public_bots FOR DELETE TO authenticated
-  USING (owner_id = auth.uid());
+  USING (owner_id = auth.uid() AND hidden_at IS NULL);
 
 -- No UPDATE grant: `publish_bot` is the only way a listing changes, which is
 -- what makes the per-account cap unavoidable. The one column somebody else

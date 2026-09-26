@@ -2262,7 +2262,14 @@ BEGIN
   END IF;
   v := publish_bot('dddd0000-0000-4000-8000-000000000003', 'badbot',
                    'https://example.com/badbot', 'edited');
-  RAISE NOTICE 'ok  the owner sees why, and republishing does not undo it';
+  -- Nor does deleting it and publishing again, which would make a fresh row
+  -- that no moderator had ever marked.
+  DELETE FROM public_servers WHERE id = 'dddd0000-0000-4000-8000-000000000001';
+  IF NOT EXISTS (SELECT 1 FROM public_servers
+                  WHERE id = 'dddd0000-0000-4000-8000-000000000001') THEN
+    RAISE EXCEPTION 'FAIL: an owner deleted a hidden listing, and could publish it afresh';
+  END IF;
+  RAISE NOTICE 'ok  the owner sees why, and neither republishing nor deleting undoes it';
 END $$;
 
 DO $$ BEGIN PERFORM set_config('request.jwt.claims',
