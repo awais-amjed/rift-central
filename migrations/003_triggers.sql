@@ -218,6 +218,28 @@ BEGIN
   RETURN NEW;
 END; $$;
 
+-- ---------- a moderator is not a Rift account ----------
+-- Kept true from both sides, because either write alone would let the two
+-- meet: making an existing Rift account a moderator, or a moderator claiming
+-- a handle and so becoming one. See `central_admins` in 001 for why.
+CREATE OR REPLACE FUNCTION refuse_moderator_profile() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM central_admins WHERE user_id = NEW.id) THEN
+    RAISE EXCEPTION 'moderator_accounts_have_no_profile';
+  END IF;
+  RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION refuse_profile_moderator() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id) THEN
+    RAISE EXCEPTION 'rift_accounts_cannot_moderate';
+  END IF;
+  RETURN NEW;
+END; $$;
+
 DROP TRIGGER IF EXISTS attest_dm_messages ON dm_messages;
 CREATE TRIGGER attest_dm_messages BEFORE INSERT OR UPDATE ON dm_messages
   FOR EACH ROW EXECUTE FUNCTION attest_dm();
@@ -249,3 +271,11 @@ CREATE TRIGGER bot_likes_stamp BEFORE INSERT ON bot_likes
 DROP TRIGGER IF EXISTS bot_likes_recount ON bot_likes;
 CREATE TRIGGER bot_likes_recount AFTER INSERT OR DELETE ON bot_likes
   FOR EACH ROW EXECUTE FUNCTION recount_bot_likes();
+
+DROP TRIGGER IF EXISTS users_not_moderators ON users;
+CREATE TRIGGER users_not_moderators BEFORE INSERT ON users
+  FOR EACH ROW EXECUTE FUNCTION refuse_moderator_profile();
+
+DROP TRIGGER IF EXISTS moderators_not_users ON central_admins;
+CREATE TRIGGER moderators_not_users BEFORE INSERT OR UPDATE ON central_admins
+  FOR EACH ROW EXECUTE FUNCTION refuse_profile_moderator();

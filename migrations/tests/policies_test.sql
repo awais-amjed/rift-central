@@ -2028,15 +2028,30 @@ SET LOCAL ROLE authenticated;
 -- and a banned account cannot publish its way back.
 
 RESET ROLE;
+-- Erin moderates. She is an auth user and nothing more: no `users` row, which
+-- is what makes her a moderator account rather than a Rift account.
 INSERT INTO auth.users (id) VALUES
-  ('cccc0000-0000-4000-8000-0000000000e1'),  -- mod_erin, a moderator
-  ('cccc0000-0000-4000-8000-0000000000f1');  -- mod_frank, another
-INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
-  ('cccc0000-0000-4000-8000-0000000000e1', 'mod_erin',  'chat-erin',  'sign-erin'),
-  ('cccc0000-0000-4000-8000-0000000000f1', 'mod_frank', 'chat-frank', 'sign-frank');
-INSERT INTO central_admins (user_id) VALUES
-  ('cccc0000-0000-4000-8000-0000000000e1'),
-  ('cccc0000-0000-4000-8000-0000000000f1');
+  ('cccc0000-0000-4000-8000-0000000000e1');
+INSERT INTO central_admins (user_id, name) VALUES
+  ('cccc0000-0000-4000-8000-0000000000e1', 'Erin');
+
+DO $$
+BEGIN
+  BEGIN
+    INSERT INTO central_admins (user_id) VALUES ('cccc0000-0000-4000-8000-000000000001');
+    RAISE EXCEPTION 'FAIL: a Rift account was made a moderator';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'rift_accounts_cannot_moderate' THEN RAISE; END IF;
+  END;
+  BEGIN
+    INSERT INTO users (id, handle, chat_public_key, signing_public_key)
+    VALUES ('cccc0000-0000-4000-8000-0000000000e1', 'erin_sneaky', 'c', 's');
+    RAISE EXCEPTION 'FAIL: a moderator claimed a handle';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'moderator_accounts_have_no_profile' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a moderator is never a Rift account, from either side';
+END $$;
 
 -- Alice's: a listed server with an icon, a listed bot, and a delisted server.
 INSERT INTO public_servers (id, owner_id, supabase_url, server_id, invite_code,
@@ -2096,7 +2111,7 @@ BEGIN
   EXCEPTION WHEN check_violation THEN NULL;
   END;
 
-  IF is_central_admin() THEN
+  IF is_central_admin() OR moderator_name() IS NOT NULL THEN
     RAISE EXCEPTION 'FAIL: a member reads as a moderator';
   END IF;
   BEGIN
@@ -2131,7 +2146,32 @@ BEGIN
 END $$;
 
 DO $$ BEGIN PERFORM set_config('request.jwt.claims',
-  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated"}', true); END $$;
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal1"}', true); END $$;
+
+DO $$
+BEGIN
+  -- The password alone: the site may learn it is a moderator account, and
+  -- nothing more.
+  IF moderator_name() IS DISTINCT FROM 'Erin' THEN
+    RAISE EXCEPTION 'FAIL: a moderator account does not know its own name';
+  END IF;
+  IF is_central_admin() THEN
+    RAISE EXCEPTION 'FAIL: a password-only session counts as a moderator';
+  END IF;
+  BEGIN
+    PERFORM moderation_queue();
+    RAISE EXCEPTION 'FAIL: a password-only session read the queue';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  moderating needs the second factor, not only the password';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
 
 DO $$
 DECLARE
@@ -2226,17 +2266,10 @@ BEGIN
 END $$;
 
 DO $$ BEGIN PERFORM set_config('request.jwt.claims',
-  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated"}', true); END $$;
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
 
 DO $$
 BEGIN
-  BEGIN
-    PERFORM moderation_set_banned('cccc0000-0000-4000-8000-0000000000f1', TRUE, 'x');
-    RAISE EXCEPTION 'FAIL: a moderator banned another moderator';
-  EXCEPTION WHEN raise_exception THEN
-    IF SQLERRM <> 'cannot_ban_a_moderator' THEN RAISE; END IF;
-  END;
-
   PERFORM moderation_set_banned('cccc0000-0000-4000-8000-000000000001', TRUE,
                                 'Repeated hateful listings');
   IF EXISTS (SELECT 1 FROM public_bots
@@ -2247,8 +2280,9 @@ BEGIN
                    AND hidden_at IS NULL) THEN
     RAISE EXCEPTION 'FAIL: a ban left the account''s listings up';
   END IF;
-  IF moderation_bans() -> 0 ->> 'handle' <> 'alice_test' THEN
-    RAISE EXCEPTION 'FAIL: the ban list does not show the ban';
+  IF moderation_bans() -> 0 ->> 'handle' <> 'alice_test'
+     OR moderation_bans() -> 0 ->> 'banned_by' <> 'Erin' THEN
+    RAISE EXCEPTION 'FAIL: the ban list does not say who was banned, and by whom';
   END IF;
   RAISE NOTICE 'ok  a ban takes every listing down';
 END $$;
@@ -2275,7 +2309,7 @@ BEGIN
 END $$;
 
 DO $$ BEGIN PERFORM set_config('request.jwt.claims',
-  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated"}', true); END $$;
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
 
 DO $$
 BEGIN

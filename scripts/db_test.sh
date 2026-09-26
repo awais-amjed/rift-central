@@ -69,6 +69,15 @@ CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID
     (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
   )::uuid $shim$;
 
+-- Supabase's too: the whole verified token, which is where the session's
+-- assurance level (`aal`) is read from.
+CREATE OR REPLACE FUNCTION auth.jwt() RETURNS JSONB
+  LANGUAGE sql STABLE AS $shim$
+  SELECT coalesce(
+    nullif(current_setting('request.jwt.claim', true), ''),
+    nullif(current_setting('request.jwt.claims', true), '')
+  )::jsonb $shim$;
+
 DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE service_role NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;

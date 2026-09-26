@@ -1306,12 +1306,26 @@ COMMENT ON FUNCTION set_pinned(BIGINT, BOOLEAN) IS
 -- are the only way to reach them, and each one checks who is asking before it
 -- does anything.
 
--- Whether the caller moderates the directory. The app asks, to decide whether
--- to show the moderation page at all, and the select policies on both listing
--- tables ask, so a moderator can see what is hidden.
+-- Whether the caller may moderate right now: a moderator account, signed in
+-- with its second factor. Every moderation call asks this, and so do the
+-- select policies on both listing tables, so a moderator can see what is
+-- hidden.
+--
+-- `aal2` is the session's assurance level after an authenticator code. A
+-- password alone gives `aal1`, and here that is not enough for anything.
 CREATE OR REPLACE FUNCTION is_central_admin() RETURNS BOOLEAN
   LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT EXISTS (SELECT 1 FROM central_admins WHERE user_id = auth.uid())
+     AND COALESCE(auth.jwt() ->> 'aal', '') = 'aal2'
+$$;
+
+-- What the admin site asks right after the password, before any second
+-- factor: is this a moderator account at all, and by what name. Null for
+-- anyone else — which includes every Rift account, since no moderator has a
+-- profile — so the site can refuse them before asking for a code.
+CREATE OR REPLACE FUNCTION moderator_name() RETURNS TEXT
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT name FROM central_admins WHERE user_id = auth.uid()
 $$;
 
 -- How many reports one account may file per rolling day. Enough for anyone
@@ -1522,12 +1536,12 @@ BEGIN
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
            'user_id', b.user_id, 'handle', u.handle,
            'created_at', b.created_at, 'reason', b.reason,
-           'banned_by_handle', m.handle)
+           'banned_by', m.name)
            ORDER BY b.created_at DESC), '[]'::jsonb)
     INTO v_out
     FROM directory_bans b
     JOIN users u ON u.id = b.user_id
-    LEFT JOIN users m ON m.id = b.banned_by;
+    LEFT JOIN central_admins m ON m.user_id = b.banned_by;
   RETURN v_out;
 END; $$;
 
@@ -1606,15 +1620,10 @@ DECLARE
   v_id     UUID;
 BEGIN
   PERFORM assert_central_admin();
+  -- Only a Rift account publishes, so only one can be banned. A moderator
+  -- has no `users` row and fails here.
   IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user) THEN
     RAISE EXCEPTION 'user_not_found';
-  END IF;
-  -- A moderator who bans themselves hides their own listings and can still
-  -- undo it, but banning another moderator is a disagreement to settle
-  -- somewhere other than here.
-  IF p_banned AND p_user <> auth.uid()
-     AND EXISTS (SELECT 1 FROM central_admins WHERE user_id = p_user) THEN
-    RAISE EXCEPTION 'cannot_ban_a_moderator';
   END IF;
 
   IF NOT p_banned THEN

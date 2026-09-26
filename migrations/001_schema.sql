@@ -462,6 +462,8 @@ CREATE INDEX IF NOT EXISTS idx_bot_likes_user ON bot_likes (user_id);
 --
 -- Three pieces: people report, a moderator hides, and an account that keeps
 -- publishing what gets hidden can be stopped from publishing at all.
+-- Reporting happens in the app; moderating happens on the admin site
+-- (`rift-admin`), as a separate account — see `central_admins`.
 --
 -- **Hiding, not deleting.** The listing stays, its owner still sees it and
 -- the reason, and a moderator can put it back. Deleting would be final for a
@@ -470,11 +472,24 @@ CREATE INDEX IF NOT EXISTS idx_bot_likes_user ON bot_likes (user_id);
 -- most likely to be the problem and the part a hidden row would otherwise
 -- keep serving to anyone who still had its path.
 
--- Who may moderate. Written by hand in SQL, never by a client: there is no
--- grant on it at all, and `is_central_admin()` (002) is the only reader.
+-- Who may moderate. Written only by `scripts/add_admin.sh`, never by a
+-- client: there is no grant on it at all, and `is_central_admin()` (002) is
+-- the only reader.
+--
+-- **A moderator is not a Rift account.** The row points at an auth user with
+-- no `users` row — no handle, no keys, nothing the app can sign in as — and a
+-- trigger in 003 keeps it that way from both sides: an auth user with a
+-- profile cannot be made a moderator, and a moderator cannot claim a handle.
+-- Moderating happens on its own site with its own login, and every
+-- moderation call also demands the second factor (`aal2`). So an account
+-- somebody phished through the app, or a session lifted from a Rift client,
+-- holds nothing here.
 CREATE TABLE IF NOT EXISTS central_admins (
-  user_id    UUID        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  user_id    UUID        PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- What other moderators see beside an action, since there is no handle.
+  name       TEXT        NOT NULL DEFAULT 'Moderator'
+                         CHECK (length(btrim(name)) BETWEEN 1 AND 40)
 );
 
 -- An account that may no longer publish, and why. Its own table rather than a
@@ -483,7 +498,7 @@ CREATE TABLE IF NOT EXISTS central_admins (
 CREATE TABLE IF NOT EXISTS directory_bans (
   user_id    UUID        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  banned_by  UUID        REFERENCES users(id) ON DELETE SET NULL,
+  banned_by  UUID        REFERENCES central_admins(user_id) ON DELETE SET NULL,
   reason     TEXT        CHECK (length(reason) <= 300)
 );
 
@@ -512,7 +527,7 @@ CREATE TABLE IF NOT EXISTS directory_reports (
   -- if it stayed up.
   resolved_at       TIMESTAMPTZ,
   resolution        TEXT        CHECK (resolution IN ('hidden', 'dismissed')),
-  resolved_by       UUID        REFERENCES users(id) ON DELETE SET NULL,
+  resolved_by       UUID        REFERENCES central_admins(user_id) ON DELETE SET NULL,
 
   CHECK ((server_listing_id IS NULL) <> (bot_listing_id IS NULL))
 );
@@ -534,6 +549,35 @@ CREATE INDEX IF NOT EXISTS idx_directory_reports_open
 -- The per-account daily ceiling counts a reporter's recent rows.
 CREATE INDEX IF NOT EXISTS idx_directory_reports_reporter
   ON directory_reports (reporter_id, created_at DESC);
+
+-- ---------- and the same change on tables that already exist ----------
+-- The first cut of these tables made moderators Rift accounts — `users` rows,
+-- moderating from inside the app. That moved to its own site and its own
+-- accounts before anybody moderated anything, and the CREATEs above are
+-- skipped on a database that has the old tables, so this states the new
+-- shape on top of them. The old rows are dropped: a moderator that was a
+-- Rift account is exactly what is no longer allowed.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint
+              WHERE conname = 'central_admins_user_id_fkey'
+                AND confrelid = 'public.users'::regclass) THEN
+    UPDATE directory_reports SET resolved_by = NULL;
+    UPDATE directory_bans    SET banned_by   = NULL;
+    ALTER TABLE directory_reports DROP CONSTRAINT IF EXISTS directory_reports_resolved_by_fkey;
+    ALTER TABLE directory_bans    DROP CONSTRAINT IF EXISTS directory_bans_banned_by_fkey;
+    DELETE FROM central_admins;
+    ALTER TABLE central_admins DROP CONSTRAINT central_admins_user_id_fkey;
+    ALTER TABLE central_admins ADD CONSTRAINT central_admins_user_id_fkey
+      FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+    ALTER TABLE central_admins ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'Moderator'
+      CHECK (length(btrim(name)) BETWEEN 1 AND 40);
+    ALTER TABLE directory_reports ADD CONSTRAINT directory_reports_resolved_by_fkey
+      FOREIGN KEY (resolved_by) REFERENCES central_admins(user_id) ON DELETE SET NULL;
+    ALTER TABLE directory_bans ADD CONSTRAINT directory_bans_banned_by_fkey
+      FOREIGN KEY (banned_by) REFERENCES central_admins(user_id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- ============================================================
 -- Push notifications

@@ -221,6 +221,8 @@ REVOKE ALL ON central_admins, directory_bans, directory_reports
 
 GRANT EXECUTE ON FUNCTION is_central_admin() TO authenticated;
 
+GRANT EXECUTE ON FUNCTION moderator_name() TO authenticated;
+
 GRANT EXECUTE ON FUNCTION report_listing(TEXT, UUID, TEXT, TEXT) TO authenticated;
 
 GRANT EXECUTE ON FUNCTION moderation_queue()  TO authenticated;

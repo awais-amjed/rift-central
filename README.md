@@ -27,6 +27,7 @@ migrations/tests/           policy tests — what each role may actually reach
 supabase/functions/         edge functions: publish_server, push_send
 relay/                      the push relay's hosts — Node, Cloudflare, or the function
 scripts/db_test.sh          runs the policy tests against a scratch database
+scripts/add_admin.sh        creates or removes a moderator account
 ```
 
 `supabase/functions/` rather than `functions/` because that is the layout the
@@ -92,31 +93,37 @@ directory is the exception — names, descriptions and icons written by
 strangers — and it is served from the same address as accounts, DMs and
 backups. So it has a report button and moderators.
 
-- **Anyone signed in reports** a listing from the directory, with a reason from
-  a short list and optional words. One open report per person per listing,
-  twenty a day.
-- **A moderator sees the queue** in the app, under Settings → Moderation,
-  which only moderators are shown. Each listing comes with its reports, what it
+- **Anyone signed in reports** a listing from the directory in the app, with
+  a reason from a short list and optional words. One open report per person
+  per listing, twenty a day.
+- **Moderators work on the admin site** (`rift-admin`, its own domain), never
+  in the app. There they see each reported listing with its reports, what it
   said when reported, and who published it.
 - **Hide** takes a listing out of everyone's browse, drops its icon (the
   nightly sweep deletes the bytes) and closes its reports. The owner still sees
   the listing and the reason, and republishing does not bring it back. A
   moderator can show it again.
-- **Dismiss** closes the reports and leaves the listing up.
+- **Keep it up** closes the reports and leaves the listing.
 - **Ban** stops an account publishing and hides everything it has listed.
   Lifting a ban restores publishing but not the listings; each comes back by
   hand.
 
-Moderators are rows in `central_admins`, which no client can write. Adding one
-is SQL against the project:
+**A moderator is a separate account, not a Rift account.** It is an auth user
+with a password and no profile, listed in `central_admins`; a trigger stops a
+Rift account becoming one and stops one claiming a handle. Every moderation
+function also requires the session's second factor (`aal2`), so the admin site
+makes a new moderator set up an authenticator app on first sign-in, and a
+password alone reaches nothing.
 
-```sql
-INSERT INTO central_admins (user_id)
-SELECT id FROM users WHERE handle = 'their_handle';
+Adding or removing one:
+
+```bash
+./scripts/add_admin.sh moderator@example.com "Their name"   # asks for a password
+./scripts/add_admin.sh --remove moderator@example.com
 ```
 
-and removing one is the matching `DELETE`. The account needs a claimed handle
-first, because that is what a `users` row is.
+Use an address with no Rift account. The script reads the Supabase CLI's token
+from the keyring and never takes the password as an argument.
 
 ## The relay
 
