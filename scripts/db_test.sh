@@ -81,6 +81,8 @@ CREATE OR REPLACE FUNCTION auth.jwt() RETURNS JSONB
 DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE service_role NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- Supabase Auth's own role, which calls the second factor's lockout hook.
+DO $$ BEGIN CREATE ROLE supabase_auth_admin NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 GRANT USAGE ON SCHEMA public, auth, extensions TO anon, authenticated, service_role;
 
 -- Storage, as far as the bucket policies reach into it: the two tables they

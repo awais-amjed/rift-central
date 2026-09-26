@@ -2367,6 +2367,90 @@ BEGIN
   RAISE NOTICE 'ok  twenty reports a day';
 END $$;
 
+-- ============================================================
+-- 22. The second factor's lockout
+-- ============================================================
+-- Five wrong authenticator codes in fifteen minutes lock the account, the
+-- right code included; only Supabase Auth may ask.
+
+RESET ROLE;
+INSERT INTO auth.users (id) VALUES ('cccc0000-0000-4000-8000-0000000000e2');
+SET LOCAL ROLE authenticated;
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM hook_mfa_verification_attempt(
+      '{"user_id":"cccc0000-0000-4000-8000-0000000000e2","valid":false}');
+    RAISE EXCEPTION 'FAIL: a member could feed the lockout hook';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM 1 FROM mfa_failed_attempts;
+    RAISE EXCEPTION 'FAIL: a member can read the failed attempts';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  a member cannot reach the lockout';
+END $$;
+
+-- Supabase Auth's role belongs to the database's superuser on a real stack, so
+-- the test cannot become it; it checks the grant and runs the rest as owner.
+RESET ROLE;
+
+DO $$
+BEGIN
+  IF NOT has_function_privilege('supabase_auth_admin',
+       'hook_mfa_verification_attempt(jsonb)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: Supabase Auth cannot call the lockout hook';
+  END IF;
+  RAISE NOTICE 'ok  Supabase Auth can call the lockout hook';
+END $$;
+
+DO $$
+DECLARE
+  v_wrong JSONB := '{"user_id":"cccc0000-0000-4000-8000-0000000000e2",
+                     "factor_id":"f","factor_type":"totp","valid":false}';
+  v_right JSONB := '{"user_id":"cccc0000-0000-4000-8000-0000000000e2",
+                     "factor_id":"f","factor_type":"totp","valid":true}';
+BEGIN
+  -- Four wrong and a right one: the count starts again.
+  FOR i IN 1..4 LOOP
+    IF hook_mfa_verification_attempt(v_wrong) ->> 'decision' <> 'continue' THEN
+      RAISE EXCEPTION 'FAIL: locked after only % wrong codes', i;
+    END IF;
+  END LOOP;
+  IF hook_mfa_verification_attempt(v_right) ->> 'decision' <> 'continue' THEN
+    RAISE EXCEPTION 'FAIL: the right code was refused before any lock';
+  END IF;
+
+  FOR i IN 1..4 LOOP
+    IF hook_mfa_verification_attempt(v_wrong) ->> 'decision' <> 'continue' THEN
+      RAISE EXCEPTION 'FAIL: a right code did not clear the count';
+    END IF;
+  END LOOP;
+  IF hook_mfa_verification_attempt(v_wrong) ->> 'decision' <> 'reject' THEN
+    RAISE EXCEPTION 'FAIL: the fifth wrong code did not lock';
+  END IF;
+  IF hook_mfa_verification_attempt(v_right) ->> 'decision' <> 'reject' THEN
+    RAISE EXCEPTION 'FAIL: the right code got through a lock';
+  END IF;
+  RAISE NOTICE 'ok  five wrong codes lock the second factor, the right one included';
+END $$;
+
+-- Fifteen minutes on.
+UPDATE mfa_failed_attempts SET failed_at = failed_at - INTERVAL '16 minutes';
+
+DO $$
+BEGIN
+  IF hook_mfa_verification_attempt(
+       '{"user_id":"cccc0000-0000-4000-8000-0000000000e2","valid":true}')
+       ->> 'decision' <> 'continue' THEN
+    RAISE EXCEPTION 'FAIL: the lock outlived its window';
+  END IF;
+  RAISE NOTICE 'ok  the lock lifts after fifteen minutes';
+END $$;
+
+RESET ROLE;
 SET LOCAL ROLE authenticated;
 
 ROLLBACK;

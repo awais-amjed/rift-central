@@ -1644,3 +1644,67 @@ BEGIN
     PERFORM moderation_set_hidden('bot', v_id, TRUE, v_reason);
   END LOOP;
 END; $$;
+
+-- ---------- the second factor's lockout ----------
+-- Supabase Auth calls this on every authenticator code it checks, when the
+-- "MFA verification attempt" hook names it (`GOTRUE_HOOK_MFA_VERIFICATION_ATTEMPT_*`,
+-- see `stack/`). Its own limit is per IP address — 15 a minute — and cannot
+-- be changed, so a password plus enough addresses turns a six-digit code into
+-- a guessing game. This counts per account instead.
+--
+-- Five wrong codes inside fifteen minutes lock the account's second factor
+-- for the rest of that window: every code is refused, the right one included,
+-- or the lock would only slow the guessing down. A refusal here also signs the
+-- account out everywhere (Supabase Auth does that on `reject`), so whoever was
+-- guessing has to get past the password again. A right code outside a lock
+-- clears the count.
+--
+-- Twenty guesses an hour at most, against a code with three right answers at
+-- any moment (Supabase accepts one step of clock drift either way): about two
+-- years of guessing on average, where the IP limit alone allowed weeks.
+--
+-- The cost: somebody who has the password can keep the real moderator locked
+-- out. That is the moment to change the password anyway.
+CREATE OR REPLACE FUNCTION mfa_lockout_attempts() RETURNS INTEGER
+  LANGUAGE sql IMMUTABLE AS $$ SELECT 5 $$;
+
+CREATE OR REPLACE FUNCTION mfa_lockout_window() RETURNS INTERVAL
+  LANGUAGE sql IMMUTABLE AS $$ SELECT INTERVAL '15 minutes' $$;
+
+-- `event` is {factor_id, factor_type, user_id, valid}; the answer is
+-- {decision: 'continue'} or {decision: 'reject', message}.
+CREATE OR REPLACE FUNCTION hook_mfa_verification_attempt(event JSONB)
+  RETURNS JSONB
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_user   UUID    := (event ->> 'user_id')::uuid;
+  v_valid  BOOLEAN := COALESCE((event ->> 'valid')::boolean, FALSE);
+  v_failed INTEGER;
+  v_locked JSONB   := jsonb_build_object(
+    'decision', 'reject',
+    'message',  'Too many wrong codes. Wait 15 minutes, then sign in again.');
+BEGIN
+  -- One account's attempts in order: two guesses racing each other must not
+  -- both read four failures and both be let through.
+  PERFORM pg_advisory_xact_lock(hashtextextended('mfa:' || v_user::text, 0));
+
+  DELETE FROM mfa_failed_attempts
+   WHERE user_id = v_user AND failed_at < now() - mfa_lockout_window();
+  SELECT count(*) INTO v_failed FROM mfa_failed_attempts WHERE user_id = v_user;
+
+  IF v_failed >= mfa_lockout_attempts() THEN
+    RETURN v_locked;
+  END IF;
+
+  IF v_valid THEN
+    DELETE FROM mfa_failed_attempts WHERE user_id = v_user;
+    RETURN jsonb_build_object('decision', 'continue');
+  END IF;
+
+  INSERT INTO mfa_failed_attempts (user_id) VALUES (v_user);
+  IF v_failed + 1 >= mfa_lockout_attempts() THEN
+    RETURN v_locked;
+  END IF;
+  -- Supabase Auth then refuses the wrong code in its own words.
+  RETURN jsonb_build_object('decision', 'continue');
+END; $$;

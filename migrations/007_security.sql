@@ -237,6 +237,13 @@ GRANT EXECUTE ON FUNCTION moderation_dismiss(TEXT, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION moderation_set_banned(UUID, BOOLEAN, TEXT)
   TO authenticated;
 
+-- The lockout hook is Supabase Auth's to call and nobody else's: a member who
+-- could call it could lock any account's second factor, or clear their own
+-- count. Its table has no grant; the hook reaches it as definer.
+REVOKE ALL ON mfa_failed_attempts FROM anon, authenticated;
+GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
+GRANT EXECUTE ON FUNCTION hook_mfa_verification_attempt(JSONB) TO supabase_auth_admin;
+
 DROP POLICY IF EXISTS device_tokens_own ON device_tokens;
 CREATE POLICY device_tokens_own ON device_tokens FOR ALL TO authenticated
   USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
@@ -508,6 +515,8 @@ ALTER TABLE central_admins    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE directory_bans    ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE directory_reports ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE mfa_failed_attempts ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE device_tokens ENABLE ROW LEVEL SECURITY;
 

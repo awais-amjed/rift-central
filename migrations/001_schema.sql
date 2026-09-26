@@ -579,6 +579,21 @@ BEGIN
   END IF;
 END $$;
 
+-- ---------- the second factor's lockout ----------
+-- Wrong authenticator codes, one row each, read by the hook in 002
+-- (`hook_mfa_verification_attempt`). Supabase Auth limits code checks by IP
+-- address only, so with a password in hand and enough addresses a six-digit
+-- code falls to guessing; counting per account is what stops that. Only rows
+-- inside the lockout window mean anything, and the hook deletes the rest.
+CREATE TABLE IF NOT EXISTS mfa_failed_attempts (
+  id        BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id   UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  failed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mfa_failed_attempts_user
+  ON mfa_failed_attempts (user_id, failed_at);
+
 -- ============================================================
 -- Push notifications
 -- ============================================================
