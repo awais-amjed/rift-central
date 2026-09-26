@@ -28,7 +28,7 @@ supabase/functions/         edge functions: publish_server, push_send
 relay/                      the push relay's hosts — Node, Cloudflare, or the function
 scripts/db_test.sh          runs the policy tests against a scratch database
 scripts/add_admin.sh        creates or removes a moderator account
-stack/                      central self-hosted: compose, secrets, `up.sh`
+stack/                      central self-hosted — compose, setup, deploy guide
 ```
 
 `supabase/functions/` rather than `functions/` because that is the layout the
@@ -132,6 +132,7 @@ Adding or removing one:
 ```bash
 ./scripts/add_admin.sh moderator@example.com "Their name"   # asks for a password
 ./scripts/add_admin.sh --remove moderator@example.com
+./scripts/add_admin.sh --stack …        # the same, on the self-hosted stack
 ```
 
 Use an address with no Rift account. The script reads the Supabase CLI's token
@@ -329,30 +330,24 @@ Treat every figure above as needing a check rather than a quote.
 
 ## Running central yourself
 
-`stack/` is central as containers — Postgres, Supabase Auth, PostgREST,
-Realtime, Storage and Kong, upstream images at the versions `rift-self-host`
-pins — for the VPS it is moving to, and for testing locally before then.
+`stack/` is central as containers — the same services as the managed project,
+plus Caddy for TLS — and is what the Leaseweb VPS runs. Its README is the
+deploy guide:
 
 ```bash
-./stack/up.sh     # first run generates stack/.env; every run applies the migrations
+cd stack && ./setup.py --domain central.example.com --fcm key.json && ./up.sh
 ```
 
-It listens on `127.0.0.1:28000`. `stack/setup.py` writes the secrets to
-`stack/.env` and Kong's config to `stack/volumes/api/kong.yml`, both mode 600
-and both gitignored; the publishable and secret keys for clients and scripts
-are in that `.env`. Applying every migration on every run is deliberate: each
-file states its final shape and is safe to re-run, which is how the hosted
-project has been kept current too.
+Without `--domain` it is a local stack on `127.0.0.1:28000`. Proved locally on
+26 September 2026: all seven migrations apply and re-apply; moderator sign-in
+with a second factor, and its lockout, from `rift-admin`; the nightly sweep
+and a push request from the database to their functions; `publish_server`
+refusing every internal address; confirmation email with Rift's template, its
+link confirming the account; TLS through Caddy (with its local issuer — a real
+certificate needs a real domain). **Off-box backups are still missing** and are
+needed before it carries real accounts.
 
-Proved locally on 26 September 2026: all seven migrations apply to it, twice;
-moderator sign-in with a second factor works from `rift-admin`; the lockout
-above locks and lifts.
-
-**Not in it yet**, and each is needed before it replaces the hosted project:
-the three edge functions and their Kong route, TLS in front (Caddy, as
-`rift-self-host` does), SMTP for confirmation mail (`SMTP_*` and
-`MAILER_AUTOCONFIRM=false` in `.env`), off-box backups, and `add_admin.sh`,
-which still talks to the hosted project's Management API.
+The steps below are for the managed project and stay until it is retired.
 
 ## Bringing up a project from nothing
 

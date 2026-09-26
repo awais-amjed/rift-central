@@ -1,15 +1,21 @@
 # Central, self-hosted — the stack that replaces the managed Supabase project.
 #
-#   ./up.sh        generate secrets on first run, start, apply the migrations
+#   ./setup.py --domain central.example.com --fcm firebase-key.json
+#   ./up.sh
+#
+# setup.py writes .env (every secret, generated) and the rendered config; up.sh
+# starts everything and applies the migrations. Without --domain it is a local
+# stack on 127.0.0.1:28000 with no TLS. See README.md beside this file.
 #
 # Every image is upstream and unmodified, at the versions rift-self-host pins,
 # and each service is configured as it is there; the comments on the settings
 # that bit are in that repository's docker-compose.yml and are not repeated.
-# What differs is central's own: email sign-in, the authenticator codes the
-# admin site needs, and the lockout hook on them.
+# What differs is central's own: email sign-in and its templates, the
+# authenticator codes the admin site needs and the lockout hook on them, and
+# central's three edge functions.
 #
-# Not here yet: the three edge functions, TLS, SMTP and off-box backups. It
-# listens on 127.0.0.1 only until they are.
+# Kong is published on loopback in both modes, so scripts on the machine
+# (`add_admin.sh`) reach the API without going out and back through TLS.
 
 name: rift-central
 
@@ -38,6 +44,11 @@ services:
       KONG_ROUTER_FLAVOR: expressions
       KONG_DNS_ORDER: LAST,A,CNAME
       KONG_DNS_NOT_FOUND_TTL: 1
+      # Re-resolve the services every few seconds. Compose gives a recreated
+      # container a new address — which happens whenever up.sh changes one's
+      # settings — and Kong otherwise keeps the old one and answers 502 until
+      # it is restarted itself.
+      KONG_DNS_VALID_TTL: 5
       KONG_PLUGINS: request-transformer,cors,key-auth,acl,post-function
       KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
       KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
@@ -89,6 +100,38 @@ services:
       GOTRUE_SMTP_USER: ${SMTP_USER:-}
       GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
       GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_SENDER:-no-reply@joinrift.app}
+      GOTRUE_SMTP_SENDER_NAME: Rift
+      # Coupled to the client and the templates: the templates say "one hour"
+      # in words, and the app's resend cooldown is these same 60 seconds.
+      GOTRUE_MAILER_OTP_EXP: 3600
+      GOTRUE_SMTP_MAX_FREQUENCY: 60s
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: 30
+      GOTRUE_MAILER_NOTIFICATIONS_PASSWORD_CHANGED_ENABLED: "true"
+      # Links in the emails are API_EXTERNAL_URL plus these. Auth defaults to
+      # a bare `/verify`, which is right for Auth on its own and a 404 behind
+      # Kong, where it lives under /auth/v1.
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+
+      # The emails themselves, from rift-website/email-templates — the source
+      # of truth for them — served on the internal network by `mail-templates`
+      # below. Auth fetches a template when it sends one.
+      GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://mail-templates/confirm-signup.html
+      GOTRUE_MAILER_TEMPLATES_RECOVERY: http://mail-templates/reset-password.html
+      GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGE: http://mail-templates/change-email.html
+      GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: http://mail-templates/magic-link.html
+      GOTRUE_MAILER_TEMPLATES_INVITE: http://mail-templates/invite.html
+      GOTRUE_MAILER_TEMPLATES_REAUTHENTICATION: http://mail-templates/reauthentication.html
+      GOTRUE_MAILER_TEMPLATES_PASSWORD_CHANGED_NOTIFICATION: http://mail-templates/password-changed.html
+      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Confirm your email
+      GOTRUE_MAILER_SUBJECTS_RECOVERY: Reset your Rift password
+      GOTRUE_MAILER_SUBJECTS_EMAIL_CHANGE: Confirm your new address
+      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your sign-in link
+      GOTRUE_MAILER_SUBJECTS_INVITE: You have been invited to Rift
+      GOTRUE_MAILER_SUBJECTS_REAUTHENTICATION: Confirm it is you
+      GOTRUE_MAILER_SUBJECTS_PASSWORD_CHANGED_NOTIFICATION: Your password was changed
 
       # The admin site's second factor (rift-admin). Central's moderation
       # functions refuse any session that has not passed it (`aal2`, 002).
@@ -205,6 +248,67 @@ services:
     volumes:
       - storage-data:/var/lib/storage
 
+  functions:
+    container_name: central-functions
+    image: supabase/edge-runtime:v1.76.2
+    restart: unless-stopped
+    depends_on:
+      kong:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/9000'"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    volumes:
+      # One mount per function, so the runtime serves these three and nothing
+      # else that might one day sit in that directory.
+      - ./functions/main:/home/deno/functions/main:ro
+      - ../supabase/functions/publish_server:/home/deno/functions/publish_server:ro
+      - ../supabase/functions/push_send:/home/deno/functions/push_send:ro
+      - ../supabase/functions/sweep_dm_attachments:/home/deno/functions/sweep_dm_attachments:ro
+      - deno-cache:/root/.cache/deno
+    # Only what the functions read. The router hands its whole environment to
+    # every worker, so anything else put here — the database password, the
+    # JWT secret — would be one bug in a function away from leaking.
+    environment:
+      SUPABASE_URL: http://kong:8000
+      RIFT_SECRET_KEY: ${SECRET_KEY:-}
+      PUSH_SECRET: ${PUSH_SECRET:-}
+      FCM_SERVICE_ACCOUNT: ${FCM_SERVICE_ACCOUNT:-}
+      ATTACHMENT_SWEEP_SECRET: ${ATTACHMENT_SWEEP_SECRET:-}
+      VERIFY_JWT: "false"
+    command: ["start", "--main-service", "/home/deno/functions/main"]
+
+  # The email templates, for Auth to fetch. Internal only: nothing publishes a
+  # port, and the files are the website repository's, read-only.
+  mail-templates:
+    container_name: central-mail-templates
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    volumes:
+      - ${EMAIL_TEMPLATES_DIR:-../../rift-website/email-templates}:/srv:ro
+    command: ["caddy", "file-server", "--root", "/srv", "--listen", ":80"]
+
+  # TLS in front of Kong. Only with a domain: `setup.py --domain` turns the
+  # profile on (COMPOSE_PROFILES in .env).
+  caddy:
+    container_name: central-caddy
+    image: caddy:2.11-alpine
+    profiles: [tls]
+    restart: unless-stopped
+    depends_on:
+      kong:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./volumes/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
   db:
     container_name: central-db
     image: supabase/postgres:17.6.1.173
@@ -242,3 +346,6 @@ volumes:
   db-data:
   db-config:
   storage-data:
+  deno-cache:
+  caddy-data:
+  caddy-config:

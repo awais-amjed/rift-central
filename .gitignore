@@ -15,3 +15,5 @@ supabase/.temp/
 # The local stack's secrets and the config rendered from them (stack/setup.py).
 stack/.env
 stack/volumes/api/
+stack/volumes/caddy/
+stack/volumes/.loaded

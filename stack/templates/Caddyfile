@@ -1,0 +1,26 @@
+# TLS for central, on one domain. Rendered by setup.py into
+# volumes/caddy/Caddyfile with the domain given to `setup.py --domain`.
+#
+# Certificates come from Let's Encrypt on first request and renew themselves;
+# ports 80 and 443 must reach this machine and the domain's A record must point
+# at it. No ACME email, for the reason rift-self-host's Caddyfile gives.
+
+{{DOMAIN}} {
+	encode zstd gzip
+
+	reverse_proxy kong:8000 {
+		# Realtime holds a socket open for as long as a client is connected;
+		# the default timeouts would cut it.
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+
+	# The largest bucket takes 10 MB (DM attachments, 005). Storage enforces
+	# each bucket's own limit; this only stops an oversized body being
+	# buffered on the way there.
+	request_body {
+		max_size 20MB
+	}
+}

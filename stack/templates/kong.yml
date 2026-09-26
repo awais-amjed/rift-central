@@ -3,8 +3,7 @@
 # setup.py's; the `$(...)` expressions are Kong's own and survive rendering.
 #
 # Taken from rift-self-host's, which is trimmed from upstream's to the routes a
-# client calls. Edge functions are not routed yet: this stack does not run
-# them (see README.md).
+# client calls.
 _format_version: "2.1"
 _transform: true
 
@@ -206,3 +205,19 @@ services:
                 if auth == nil or auth == "" or auth:find("^%s*$") then
                   kong.service.request.clear_header("authorization")
                 end
+
+  ## The three functions. No key-auth, as on rift-self-host: `push_send` and
+  ## `sweep_dm_attachments` are called with a shared secret and no API key,
+  ## and each function checks its own caller. The database reaches them
+  ## directly on the internal network, not through here.
+  - name: functions-v1
+    _comment: "Edge Functions: /functions/v1/* -> http://functions:9000/*"
+    url: http://functions:9000/
+    read_timeout: 150000
+    routes:
+      - name: functions-v1-all
+        strip_path: true
+        paths:
+          - /functions/v1/
+    plugins:
+      - name: cors
