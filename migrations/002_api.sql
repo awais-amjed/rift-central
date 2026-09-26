@@ -1248,6 +1248,12 @@ BEGIN
   IF v_low IS NULL THEN
     RAISE EXCEPTION 'message_not_found';
   END IF;
+  -- The same gate as `send_dm`. A pin changes what the other person sees and
+  -- rings them, so somebody unfriended — or blocked, which ends the
+  -- friendship — must not keep a way to do either.
+  IF NOT are_friends(v_low, v_high) THEN
+    RAISE EXCEPTION 'not_friends';
+  END IF;
 
   IF p_pinned THEN
     IF NOT EXISTS (SELECT 1 FROM dm_message_pins WHERE message_id = p_message)
@@ -1270,5 +1276,6 @@ BEGIN
 END; $$;
 
 COMMENT ON FUNCTION set_pinned(BIGINT, BOOLEAN) IS
-  'Pin or unpin a DM, for either of the two. Fifty per conversation; the '
-  'fifty-first raises pin_limit. Rings dm_pin on both sides.';
+  'Pin or unpin a DM, for either of the two while they are friends '
+  '(not_friends otherwise). Fifty per conversation; the fifty-first raises '
+  'pin_limit. Rings dm_pin on both sides.';

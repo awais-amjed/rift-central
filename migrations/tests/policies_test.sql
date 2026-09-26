@@ -1923,6 +1923,12 @@ RESET ROLE;
 DO $$ BEGIN PERFORM set_config('request.jwt.claims', '{}', true); END $$;
 INSERT INTO dm_messages (id, sender_id, recipient_id, ciphertext, nonce, signature, key_version)
 SELECT 7600 + g, 'cccc0000-0000-4000-8000-000000000002', 'cccc0000-0000-4000-8000-000000000001', 'c', 'n', 's', 1 FROM generate_series(0, 50) AS g;
+-- Pinning takes a friendship, as sending does; whatever earlier sections did
+-- to this pair, these two are friends for this one.
+INSERT INTO friendships (low_id, high_id, requester_id, status)
+VALUES ('cccc0000-0000-4000-8000-000000000001', 'cccc0000-0000-4000-8000-000000000002',
+        'cccc0000-0000-4000-8000-000000000001', 'accepted')
+ON CONFLICT (low_id, high_id) DO UPDATE SET status = 'accepted';
 
 SET LOCAL ROLE authenticated;
 DO $$ BEGIN PERFORM set_config('request.jwt.claims',
@@ -1988,6 +1994,28 @@ BEGIN
   END;
   PERFORM set_pinned(7600, true);
   RAISE NOTICE 'ok  fifty to a conversation, and re-pinning is not a new one';
+END $$;
+
+-- Unfriended — which is also what a block does — neither side may change the
+-- pins any more, because each change is shown to the other and rings them.
+RESET ROLE;
+DELETE FROM friendships
+ WHERE low_id = 'cccc0000-0000-4000-8000-000000000001'
+   AND high_id = 'cccc0000-0000-4000-8000-000000000002';
+SET LOCAL ROLE authenticated;
+
+DO $$
+BEGIN
+  BEGIN
+    PERFORM set_pinned(7600, false);
+    RAISE EXCEPTION 'FAIL: an unfriended account changed the pins';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_friends' THEN RAISE; END IF;
+  END;
+  IF NOT EXISTS (SELECT 1 FROM dm_message_pins WHERE message_id = 7600) THEN
+    RAISE EXCEPTION 'FAIL: the unfriended pins are no longer readable';
+  END IF;
+  RAISE NOTICE 'ok  pins stop changing when the friendship ends, and stay readable';
 END $$;
 
 SET LOCAL ROLE authenticated;
