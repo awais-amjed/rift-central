@@ -127,6 +127,10 @@ read** — keep it with the offline copy of `.env`.
    BACKUP_S3_ACCESS_KEY_ID='…'
    BACKUP_S3_SECRET_ACCESS_KEY='…'
    ```
+   A bucket created with the EU jurisdiction has its own endpoint,
+   `https://<account id>.eu.r2.cloudflarestorage.com`. Keep the bucket in the
+   Standard storage class: Infrequent Access bills every object for at least
+   30 days, and an hourly dump lives for one.
 3. **Run it once by hand:** `./backup.sh`.
 4. **The bucket's rules:** `./backup.sh --rules` prints four prefixes. For
    each, in the bucket's settings, add
