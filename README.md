@@ -344,8 +344,8 @@ with a second factor, and its lockout, from `rift-admin`; the nightly sweep
 and a push request from the database to their functions; `publish_server`
 refusing every internal address; confirmation email with Rift's template, its
 link confirming the account; TLS through Caddy (with its local issuer — a real
-certificate needs a real domain). **Off-box backups are still missing** and are
-needed before it carries real accounts.
+certificate needs a real domain). Off-box backups run hourly, encrypted, to an
+S3 bucket, and a wiped stack has been restored from them — see `stack/README.md`.
 
 The steps below are for the managed project and stay until it is retired.
 
