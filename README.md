@@ -521,13 +521,14 @@ repository is something a self-hoster runs.
 
 ## Where this sits
 
-Rift is six repositories, meant to be cloned as siblings.
+Rift is seven repositories, meant to be cloned as siblings.
 
 | Repo | Holds |
 |---|---|
 | `rift` | the client: Flutter app, Rust crate, `rift_crypto` |
 | `rift-self-host` | a server's schema, endpoints and console — anyone runs one |
-| `rift-central` | accounts, the public directory, the push relay — we run it |
+| `rift-central` | accounts, the server and bot directories, the push relay — we run it |
 | `rift-bot-sdk` | the TypeScript bot SDK |
-| `rift-admin` | the moderation dashboard — its own site and accounts |
+| `rift-admin` | the directory moderation dashboard — its own site and accounts |
+| `rift-models` | the on-device image classifier and the tooling that builds it |
 | `rift-website` | joinrift.app, and the self-hosting docs |
