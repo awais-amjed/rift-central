@@ -10,8 +10,8 @@ import { createClient } from "@supabase/supabase-js";
  * same config row and a second entry in the same cron job to do the same
  * thing: ask the database what is unreferenced and hand the list to Storage.
  *
- * Called once a day by the database (migration 018), never by clients. The
- * database decides which blobs — `expired_dm_attachments()`, migration 017 —
+ * Called once a day by the database, never by clients. The
+ * database decides which blobs — `expired_dm_attachments()` —
  * and this only does the part SQL cannot: `storage.protect_delete()` refuses a
  * direct DELETE on `storage.objects`, so removing a blob needs the Storage API
  * and the service key.

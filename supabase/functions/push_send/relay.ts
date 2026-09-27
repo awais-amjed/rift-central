@@ -217,7 +217,7 @@ export function createRelay(config: RelayConfig) {
       const dead = tokens.filter((_, i) => !results[i]);
       // Only central's own registry is ours to clean. A relayed token lives in
       // a database we have no credentials for, and the dead ones there are
-      // swept on staleness instead (self-hosted migration 010) — reporting
+      // swept on staleness instead — reporting
       // them back would tell us which of a server's members had uninstalled.
       if (dead.length > 0 && !relayId) await forget(dead);
 
