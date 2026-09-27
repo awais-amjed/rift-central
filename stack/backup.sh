@@ -47,7 +47,9 @@ if [[ ${1:-} == --rules ]]; then
 fi
 
 # ── 1. The database ─────────────────────────────────────────
-now=$(date -u +%Y-%m-%dT%H%MZ)
+# To the second: a locked bucket refuses to overwrite, so a run by hand in
+# the same minute as the timer's must not reuse its name.
+now=$(date -u +%Y-%m-%dT%H%M%SZ)
 day=$(date -u +%F)
 week=$(date -u +%G-W%V)
 hourly="hourly/$now.dump"

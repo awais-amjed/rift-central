@@ -162,7 +162,7 @@ and DM attachments expire in 30 days regardless.
 ```bash
 ./restore.sh --list                 # what there is
 ./restore.sh                        # the newest
-./restore.sh 2026-09-26T2107Z       # a particular one (or 2026-09-26, 2026-W39)
+./restore.sh 2026-09-26T210700Z     # a particular one (or 2026-09-26, 2026-W39)
 ```
 
 It asks before it replaces anything. It stops the services, loads the dump's

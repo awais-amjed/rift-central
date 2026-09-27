@@ -3,7 +3,7 @@
 #
 #   ./restore.sh --list              what there is to restore from
 #   ./restore.sh                     the newest backup
-#   ./restore.sh 2026-09-26T2107Z    an hourly one; or 2026-09-26 (daily),
+#   ./restore.sh 2026-09-26T210700Z  an hourly one; or 2026-09-26 (daily),
 #                                    2026-W39 (weekly)
 #
 # Onto a new machine: the same .env as the old one (the offline copy — it
