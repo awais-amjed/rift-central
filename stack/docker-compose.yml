@@ -106,6 +106,13 @@ services:
       GOTRUE_MAILER_OTP_EXP: 3600
       GOTRUE_SMTP_MAX_FREQUENCY: 60s
       GOTRUE_RATE_LIMIT_EMAIL_SENT: 30
+      # Auth limits sign-ins, verifications and refreshes per address only
+      # when told which header holds the address; without this it limits
+      # nothing, and a password can be guessed as fast as it can be sent.
+      # Caddy writes this header with the address it saw, replacing any a
+      # client sent. Behind no Caddy (a local stack) it is absent, and Auth
+      # skips the per-address limits.
+      GOTRUE_RATE_LIMIT_HEADER: X-Rift-Client-IP
       GOTRUE_MAILER_NOTIFICATIONS_PASSWORD_CHANGED_ENABLED: "true"
       # Links in the emails are API_EXTERNAL_URL plus these. Auth defaults to
       # a bare `/verify`, which is right for Auth on its own and a 404 behind
@@ -341,6 +348,14 @@ services:
       - config_file=/etc/postgresql/postgresql.conf
       - -c
       - log_min_messages=fatal
+
+# IPv6 on the stack's own network, so a client reaching Caddy over IPv6 keeps
+# its address. On an IPv4-only network Docker relays those connections itself
+# and every one of them arrives from the network's gateway — one address for
+# every IPv6 client, which Auth's per-address limits would count as one person.
+networks:
+  default:
+    enable_ipv6: true
 
 volumes:
   db-data:

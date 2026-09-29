@@ -9,6 +9,11 @@
 	encode zstd gzip
 
 	reverse_proxy kong:8000 {
+		# The address Auth limits by (GOTRUE_RATE_LIMIT_HEADER). Set, not
+		# appended: a value a client sent is replaced, so it cannot choose
+		# whose limit it spends.
+		header_up X-Rift-Client-IP {client_ip}
+
 		# Realtime holds a socket open for as long as a client is connected;
 		# the default timeouts would cut it.
 		transport http {

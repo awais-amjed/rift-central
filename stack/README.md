@@ -83,6 +83,7 @@ docker exec central-db psql -U postgres -c \
 | Here | Not here |
 |---|---|
 | TLS (Caddy, Let's Encrypt) | Monitoring and alerts (beyond the backup heartbeat) |
+| Per-address limits on signing in, verifying and refreshing — Caddy hands Auth each client's address, IPv6 included | |
 | Email with Rift's templates, over your SMTP | Studio (Supabase's dashboard) — `psql` in the db container instead |
 | Push, the nightly sweep, publishing servers | |
 | The second-factor lockout for moderators | |
