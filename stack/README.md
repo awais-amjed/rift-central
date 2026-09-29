@@ -20,13 +20,8 @@ Without `--domain` it is a local stack on `127.0.0.1:28000`, for testing.
    first request; nothing else is exposed.
 2. **Docker** with Compose v2, **Python 3** with `cryptography`
    (`apt install python3-cryptography`).
-3. **Two checkouts, side by side:**
-   ```bash
-   git clone <rift-central> rift-central
-   git clone <rift-website> rift-website   # the email templates live there
-   ```
-   Elsewhere is fine too: set `EMAIL_TEMPLATES_DIR` in `.env` to the
-   templates folder.
+3. **A checkout:** `git clone <rift-central> rift-central`. Everything the
+   stack runs is in it, the email templates included.
 4. **Setup:**
    ```bash
    cd rift-central/stack
@@ -94,7 +89,7 @@ docker exec central-db psql -U postgres -c \
 | Hourly encrypted backups to R2, and restore | |
 
 The emails are fetched by Auth from `mail-templates`, a file server on the
-internal network over `rift-website/email-templates`. Their subjects are in
+internal network over `../email-templates`. Their subjects are in
 `docker-compose.yml`.
 
 `functions/main/` is Supabase's router for the edge runtime; see its README.

@@ -344,7 +344,7 @@ dashboard under **Authentication** or PATCHed to `/v1/projects/<ref>/config/auth
 | `mailer_secure_email_change_enabled` | on | A change confirms at both addresses |
 | `mailer_notifications_password_changed_enabled` | on | |
 | `password_min_length` | 6 | |
-| Email subjects and templates | from `rift-website/email-templates/` | Seven templates, pasted in or PATCHed; that directory's README maps each file to its config field |
+| Email subjects and templates | from `email-templates/` | Seven templates, pasted in or PATCHed; that directory's README maps each file to its config field |
 
 The templates are the one part of Rift's design that renders somewhere we do
 not control, which is why they are version-controlled in the website repo

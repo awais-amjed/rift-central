@@ -115,9 +115,9 @@ services:
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
 
-      # The emails themselves, from rift-website/email-templates — the source
-      # of truth for them — served on the internal network by `mail-templates`
-      # below. Auth fetches a template when it sends one.
+      # The emails themselves, from this repository's email-templates — the
+      # source of truth for them — served on the internal network by
+      # `mail-templates` below. Auth fetches a template when it sends one.
       GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://mail-templates/confirm-signup.html
       GOTRUE_MAILER_TEMPLATES_RECOVERY: http://mail-templates/reset-password.html
       GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGE: http://mail-templates/change-email.html
@@ -281,13 +281,13 @@ services:
     command: ["start", "--main-service", "/home/deno/functions/main"]
 
   # The email templates, for Auth to fetch. Internal only: nothing publishes a
-  # port, and the files are the website repository's, read-only.
+  # port, and the files are mounted read-only.
   mail-templates:
     container_name: central-mail-templates
     image: caddy:2.11-alpine
     restart: unless-stopped
     volumes:
-      - ${EMAIL_TEMPLATES_DIR:-../../rift-website/email-templates}:/srv:ro
+      - ../email-templates:/srv:ro
     command: ["caddy", "file-server", "--root", "/srv", "--listen", ":80"]
 
   # TLS in front of Kong. Only with a domain: `setup.py --domain` turns the

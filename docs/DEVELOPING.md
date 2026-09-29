@@ -12,6 +12,7 @@ relay/                      the push relay's hosts — Node, Cloudflare, or the 
 scripts/db_test.sh          runs the policy tests against a scratch database
 scripts/add_admin.sh        creates or removes a moderator account
 stack/                      central self-hosted — compose, setup, deploy guide
+email-templates/            the account emails Auth sends
 ```
 
 `supabase/functions/` rather than `functions/` because that is the layout the
