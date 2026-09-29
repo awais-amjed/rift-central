@@ -5,7 +5,7 @@ Where central runs, why, and how to bring it up. The self-hosted stack's own dep
 ## Running central yourself
 
 `stack/` is central as containers — the same services as the managed project,
-plus Caddy for TLS — and is what the Leaseweb VPS runs. Its README is the
+plus Caddy for TLS — and is what `api.joinrift.app` runs. Its README is the
 deploy guide:
 
 ```bash
@@ -22,6 +22,44 @@ certificate needs a real domain). Off-box backups run hourly, encrypted, to an
 S3 bucket, and a wiped stack has been restored from them — see `stack/README.md`.
 
 The managed project's own steps are further down, under *Deploying the managed project*, and stay until it is retired.
+
+## The machine
+
+A Contabo Cloud VPS 4 (4 vCPU, 8 GB, 100 GB SSD), Ubuntu 26.04, bought 29
+September 2026 after Leaseweb declined the order at its identity check — it
+sells to businesses, and there was none to register. The reasoning below was
+written for Leaseweb and holds for Contabo, which is the fallback it names;
+the one-way upgrade applies to both.
+
+Brought up on 29 September 2026:
+
+- **Access:** SSH by key only, no passwords, and no root login — an admin
+  user with sudo. The firewall admits SSH (rate-limited), 80 and 443 (TCP,
+  and UDP for HTTP/3). Docker publishes nothing else: Kong is on 127.0.0.1.
+  Security updates install themselves; a kernel update waits for a reboot.
+- **Updating:** the Forgejo server does not expose SSH to the internet, so the
+  machine holds no credential for any repository. A workstation pushes to a
+  checkout on it (`receive.denyCurrentBranch updateInstead`), and `./up.sh`
+  there applies the change: `git push <server> dev`, then `./up.sh`.
+- **DNS:** `A` and `AAAA` for `api.joinrift.app`, not proxied, so Caddy holds
+  the certificate itself and nothing sits in front of the WebSockets.
+- **Two gigabytes of swap** and a cap on container logs (5 × 20 MB each), so a
+  spike or a chatty service cannot take the disk or the database with it.
+
+- **Email:** SES SMTP credentials of its own (IAM, `ap-southeast-1`), not the
+  managed project's — those cannot be read back out of it.
+- **Backups:** hourly to R2, with the bucket's lifecycle and lock rules in
+  place, and the bucket's token accepting requests from this machine's
+  addresses only.
+
+Proved that day: a Let's Encrypt certificate on the first request, every
+migration applied, the nightly sweep answering `200`, the scheduled jobs and
+both config rows present, SES accepting a message sent with this machine's
+login, a backup uploaded to R2 — and the same token refused from any other
+address, and refused deleting a locked dump from this one; a signup's
+confirmation email arriving in a real inbox with Rift's template, and its link
+confirming the account and landing on `/email-confirmation/`. Not yet: a real
+push, IPv6 reached from outside, and any client pointed at it.
 
 ## Where central goes when it leaves
 
