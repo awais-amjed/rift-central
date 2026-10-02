@@ -103,6 +103,11 @@ END $$;
 -- ============================================================
 -- Your own topic, to listen. Nobody sends to a topic here but the database,
 -- so there is no rule for sending, and without one a client cannot.
+--
+-- The rule asks in a subquery so it is asked once per join. The table is
+-- split by day and Realtime's join check reads every partition; a condition
+-- that never mentions the row is otherwise checked once per partition read,
+-- which grows with the server's age (rift-self-host's topic rules measured it).
 
 CREATE OR REPLACE FUNCTION can_join_topic(p_topic TEXT) RETURNS BOOLEAN
   LANGUAGE sql STABLE AS $$
@@ -117,7 +122,7 @@ BEGIN
   DROP POLICY IF EXISTS central_topic_read ON realtime.messages;
   CREATE POLICY central_topic_read ON realtime.messages
     FOR SELECT TO authenticated
-    USING (can_join_topic(realtime.topic()));
+    USING ((SELECT can_join_topic(realtime.topic())));
 END $$;
 
 DROP TRIGGER IF EXISTS dm_messages_announce ON dm_messages;
