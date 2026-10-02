@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Run the central tier's tests.
 #
-# Against a scratch database, never against the hosted project — that one has
-# real accounts on it. The scratch database gets a stand-in for the parts of
-# Supabase the migrations lean on, and then **all seven files are applied**.
+# Against a scratch database, never against the production stack. The scratch
+# database gets a stand-in for the parts of Supabase the migrations lean on,
+# and then **every numbered file is applied**, in order. First,
+# `check_locked.sh` refuses an edit to a migration that has shipped.
 #
 # They used to be applied by an explicit list that left out the scheduling and
 # the listing proof, because pg_cron only installs in one database and because
@@ -19,8 +20,9 @@
 #      `anon` and `authenticated`, and `ALTER DEFAULT PRIVILEGES ... REVOKE`
 #      does not undo them — revoking from a default that holds no explicit
 #      grant is a no-op. So the blanket revoke in 007 only means anything
-#      because it runs after every function exists, and this is the check that
-#      keeps it that way.
+#      because it runs after every function in the files before it exists; a
+#      later file revokes and grants what it adds itself, and this is the
+#      check that keeps it that way.
 #
 # Everything runs in one transaction that ends in ROLLBACK, so it writes
 # nothing. A failure raises, which aborts the transaction and exits non-zero.
@@ -47,6 +49,7 @@ psql_migrate() {
 }
 
 echo "── central (scratch database) ──────────────────────────────"
+"$ROOT/scripts/check_locked.sh"
 psql_main -c "DROP DATABASE IF EXISTS $SCRATCH" >/dev/null 2>&1
 psql_main -c "CREATE DATABASE $SCRATCH" >/dev/null
 trap 'docker exec -i "$CONTAINER" psql -U postgres -q -c "DROP DATABASE IF EXISTS $SCRATCH" >/dev/null 2>&1 || true' EXIT

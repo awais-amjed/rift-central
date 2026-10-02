@@ -50,8 +50,8 @@ Without `--domain` it is a local stack on `127.0.0.1:28000`, for testing.
    new URL and `PUBLISHABLE_KEY` from `.env`. The push relay
    (`../relay/wrangler.toml`) forwards to `https://<domain>/functions/v1/push_send`.
 
-**Updating** is `git pull` and `./up.sh` again. Every migration file is safe to
-re-run, the containers that changed are recreated, and Kong and Caddy are
+**Updating** is `git pull` and `./up.sh` again. Migrations this database has
+not run yet are applied, the containers that changed are recreated, and Kong and Caddy are
 restarted if their config changed. Kong's config holds the API keys, so it is
 never written to disk: `templates/kong.yml` is mounted as it is, and Kong
 fills the keys in from its environment at every start (`kong_start.sh`).
@@ -61,7 +61,10 @@ fills the keys in from its environment at every start (`kong_start.sh`).
 - **Runs `setup.py`**, which keeps an existing `.env` and only adds what a newer
   version needs. Options can be added later: `./setup.py --fcm key.json` then
   `./up.sh` turns push on; `--no-fcm` turns it off.
-- **Applies all seven migrations** in order, every run.
+- **Applies each migration once**, in filename order, recording its name and
+  checksum in `rift_central.migrations` in the same transaction (a schema no
+  key reaches). A file that has changed since it ran stops the run: shipped
+  migrations are locked, and a change to the schema is a new file.
 - **Writes the two config rows** (`attachment_sweep_config`, `push_config`),
   addressed to the functions on the internal network. Push's row is written
   only when there is a Firebase key: without one, `push_send` cannot start,

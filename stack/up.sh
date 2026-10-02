@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Bring central up: secrets on the first run, the containers, then every
-# migration in filename order.
+# Bring central up: secrets on the first run, the containers, then each
+# migration this database has not run yet, in filename order.
 #
-# The migrations are applied on every run, not only the first. Each file states
-# the shape it is meant to have and is written to be re-run — that is how the
-# hosted project has been kept current too — so this is also how a change to
-# one reaches a running stack.
+# Each file runs once, and is recorded with its checksum in rift_central.migrations
+# in the same transaction. The files are locked once they ship
+# (migrations/locked.sha256): a change to the schema is a new file, never an
+# edit, so a recorded file that has changed since it ran here stops the run
+# rather than being applied on top of a database it did not build.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -47,10 +48,35 @@ if [[ $rendered != "$(cat volumes/.loaded 2>/dev/null)" ]]; then
   echo "restarted the gateway for its new config"
 fi
 
-for f in ../migrations/[0-9][0-9][0-9]_*.sql; do
+# The ledger sits outside the schemas PostgREST publishes (public, storage),
+# so no key reaches it, as rift-self-host's console keeps its own.
+psql_db() {
   docker exec -i -e PGOPTIONS='-c client_min_messages=warning' central-db \
-    psql -U postgres -q -v ON_ERROR_STOP=1 -f - < "$f" >/dev/null
-  echo "applied $(basename "$f")"
+    psql -U postgres -q -v ON_ERROR_STOP=1 "$@"
+}
+psql_db >/dev/null <<'SQL'
+CREATE SCHEMA IF NOT EXISTS rift_central;
+CREATE TABLE IF NOT EXISTS rift_central.migrations (
+  name       TEXT PRIMARY KEY,
+  checksum   TEXT NOT NULL,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+REVOKE ALL ON SCHEMA rift_central FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL TABLES IN SCHEMA rift_central FROM PUBLIC, anon, authenticated;
+SQL
+for f in ../migrations/[0-9][0-9][0-9]_*.sql; do
+  name=$(basename "$f")
+  sum=$(sha256sum "$f" | cut -d' ' -f1)
+  ran=$(psql_db -tA -c "SELECT checksum FROM rift_central.migrations WHERE name = '$name'")
+  if [[ -z $ran ]]; then
+    { cat "$f"; echo; echo "INSERT INTO rift_central.migrations (name, checksum) VALUES ('$name', '$sum');"; } |
+      psql_db -1 -f - >/dev/null
+    echo "applied $name"
+  elif [[ $ran != "$sum" ]]; then
+    echo "$name has changed since it ran here. A shipped migration is never edited:" >&2
+    echo "put the change in a new numbered file. Stopping before anything else runs." >&2
+    exit 1
+  fi
 done
 
 # The two rows the database reads to call its own functions (README, "The two

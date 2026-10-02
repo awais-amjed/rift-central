@@ -24,10 +24,11 @@ Supabase CLI deploys from; it is not a directory anybody chose.
 ./scripts/db_test.sh
 ```
 
-Against a scratch database in any Postgres container, never against the hosted
-project — that one has real accounts on it. The scratch database gets a
-stand-in for the parts of Supabase the migrations lean on, **all seven files
-are applied**, and the suite ends in `ROLLBACK`.
+Against a scratch database in any Postgres container, never against the
+production stack. The scratch database gets a
+stand-in for the parts of Supabase the migrations lean on, **every numbered
+file is applied** in order, and the suite ends in `ROLLBACK`. Before that,
+`scripts/check_locked.sh` fails if a shipped migration was edited.
 
 The stand-in is deliberately faithful rather than convenient: it installs
 Supabase's own default privileges, which grant `anon` EXECUTE on every new
@@ -36,9 +37,14 @@ asks what is reachable that nobody granted by name, which is a question a
 policy test cannot ask, because by the time it runs a default grant looks
 exactly like an intended one.
 
-There are seven files and they are split by kind — tables, RPCs, triggers,
-realtime, storage, jobs, security — not by feature. Each states the shape it
-is meant to have rather than how the schema got there.
+`001` to `007` are the baseline central went to production on (Oct 3 2026),
+split by kind — tables, RPCs, triggers, realtime, storage, jobs, security —
+not by feature, each stating the shape it is meant to have. They are locked:
+`migrations/locked.sha256` holds their checksums, a change to the schema is
+the next numbered file, and `up.sh` runs each file once and records it in
+`rift_central.migrations`. A new file adds its own line to `locked.sha256`
+in the commit that adds it, and revokes and grants what it creates itself,
+since the baseline's blanket revoke ran before it.
 
 `RIFT_PG_CONTAINER` picks the container; it defaults to the one the app's local
 development stack runs.

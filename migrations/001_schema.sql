@@ -2,8 +2,10 @@
 -- Rift central — 001: the tables
 -- ============================================================
 -- Every type, table and index the shared tier has, in the shape it is meant
--- to have. Nothing here describes how it got that way: central is built by
--- running these seven files in order against an empty database.
+-- to have. Nothing here describes how it got that way: 001 to 007 are the
+-- baseline central went to production on (Oct 3 2026), run in order against
+-- an empty database. They are locked from then on (`locked.sha256`): a later
+-- change is a new numbered file, run once, after these.
 --
 -- What central is for, and what it deliberately is not: it holds the account,
 -- the handle, the friend graph, direct messages and the public directory —

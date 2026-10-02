@@ -61,6 +61,20 @@ confirmation email arriving in a real inbox with Rift's template, and its link
 confirming the account and landing on `/email-confirmation/`. Not yet: a real
 push, IPv6 reached from outside, and any client pointed at it.
 
+**Production from 3 October 2026.** The database and stored files were deleted
+and rebuilt from the migrations as they stand (it held no accounts), so the
+database is exactly the locked baseline rather than the result of re-running
+edited files over each other; `.env`, and so every key, URL and the TLS
+certificate, stayed. Checked after: Realtime's tenant seeded, both config rows
+and both jobs present, the sweep `200`, Auth and REST answering with a key and
+REST refusing without one, and a signup to SES's simulator address sending its
+confirmation (the account deleted after). The same day the hourly backups were
+found to have failed on every run since the first one by hand on 29 September:
+that run left its lock file in `/tmp` owned by the deploy user, which the timer,
+running as root, may not open (`fs.protected_regular = 2`). The lock is now
+taken on `backup.sh` itself, and a run by the timer's own service succeeded.
+Nothing watched for it, which is the monitoring this machine still lacks.
+
 ## Where central goes when it leaves
 
 Decided 24 September 2026, before the first real user, which is the only
@@ -236,15 +250,15 @@ TMPDIR=$HOME/tmp supabase functions deploy sweep_dm_attachments \
 `TMPDIR` has to point somewhere Docker Desktop shares. `/tmp` is not, and the
 bundler fails with "path is not shared from the host" rather than saying so.
 
-Migrations go through the SQL editor or `psql`, in filename order. There is no
-migrator here — this is one project with one operator, and the ledger that
-makes `rift-self-host` upgradable exists because that repo has neither.
+Migrations go through the SQL editor or `psql`, in filename order, each once:
+a managed project has no migrator. The stack's `up.sh` is one, and keeps its
+record in `rift_central.migrations`.
 
 The relay is deployed separately; see `relay/README.md`.
 
 ## Bringing up a project from nothing
 
-The seven migration files are the schema and nothing else. A Supabase project
+The migration files are the schema and nothing else. A Supabase project
 also holds settings, secrets and two rows that no migration can write, and the
 schema comes up perfectly well without any of them — which is the problem. So
 this is the list, and the last column is how to prove each one took, because

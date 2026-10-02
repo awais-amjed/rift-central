@@ -24,8 +24,8 @@
 #      file the restored database does not name: those folders hold whole
 #      days, so they bring back versions older than the dump too, and an
 #      in-place restore leaves behind what was uploaded after it.
-#   4. Runs up.sh, which starts everything and re-applies the migrations and
-#      the function config rows.
+#   4. Runs up.sh, which starts everything, applies any migration this
+#      database has not run, and writes the function config rows.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 source ./backup_remote.sh
