@@ -12,7 +12,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 # Kong and Caddy read their config files once, at start, and Compose only
 # recreates a container when its own settings change — not when a mounted
 # file does. So what they last loaded is recorded, and they are restarted
-# when setup.py has rendered something different, whoever ran it.
+# when Kong's template or start script changed, or setup.py rendered a
+# different Caddyfile. (A changed key is Kong's environment, which Compose
+# does notice.)
 python3 setup.py
 
 # Realtime's seed writes its tenant row, and on every later boot would reset
@@ -36,7 +38,7 @@ fi
 if ! grep -q "^COMPOSE_PROFILES='tls'" .env; then
   docker compose --profile tls rm -sf caddy >/dev/null 2>&1
 fi
-rendered=$({ cat volumes/api/kong.yml volumes/caddy/Caddyfile 2>/dev/null || true; } | sha256sum)
+rendered=$({ cat templates/kong.yml templates/kong_start.sh volumes/caddy/Caddyfile 2>/dev/null || true; } | sha256sum)
 if [[ $rendered != "$(cat volumes/.loaded 2>/dev/null)" ]]; then
   docker compose restart kong >/dev/null
   if grep -q "^COMPOSE_PROFILES='tls'" .env; then docker compose restart caddy >/dev/null; fi

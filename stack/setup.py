@@ -8,7 +8,8 @@
 The first run generates every secret into `.env`. Later runs keep them — a
 regenerated key would no longer match a database that already trusts the old
 one — and only add what is missing, apply the options given, and render
-`volumes/api/kong.yml` and `volumes/caddy/Caddyfile` again. Options can be
+`volumes/caddy/Caddyfile` again. Kong's config is not rendered here: Kong
+fills the keys in itself at start (`templates/kong_start.sh`). Options can be
 given on any run: adding `--fcm` to a running stack is `./setup.py --fcm …`
 followed by `./up.sh`.
 
@@ -227,10 +228,12 @@ def main() -> None:
 
     write_env(values)
 
-    kong = (HERE / "templates" / "kong.yml").read_text()
-    write_private(HERE / "volumes" / "api" / "kong.yml",
-                  render(kong, values, ("PUBLISHABLE_KEY", "SECRET_KEY", "ANON_KEY", "SERVICE_ROLE_KEY",
-                                        "ANON_KEY_ASYMMETRIC", "SERVICE_ROLE_KEY_ASYMMETRIC")))
+    # Where setup.py used to render Kong's config. It holds the keys, and
+    # nothing reads it any more.
+    old_kong = HERE / "volumes" / "api" / "kong.yml"
+    if old_kong.exists():
+        old_kong.unlink()
+        print("Removed volumes/api/kong.yml: Kong now fills its keys in at start.")
     if values["DOMAIN"]:
         caddy = (HERE / "templates" / "Caddyfile").read_text()
         write_private(HERE / "volumes" / "caddy" / "Caddyfile", render(caddy, values, ("DOMAIN",)))

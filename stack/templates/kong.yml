@@ -1,6 +1,7 @@
-# Kong's declarative config for central, rendered by setup.py with the stack's
-# keys substituted into `volumes/api/kong.yml`. Doubled-brace placeholders are
-# setup.py's; the `$(...)` expressions are Kong's own and survive rendering.
+# Kong's declarative config for central. Kong fills in the doubled-brace
+# placeholders itself at every start, from the keys in its environment
+# (`kong_start.sh`), so this file holds no secret and is mounted as it is. The
+# `$(...)` expressions are Kong's own and survive the filling in.
 #
 # Taken from rift-self-host's, which is trimmed from upstream's to the routes a
 # client calls.

@@ -36,11 +36,23 @@ services:
         condition: service_healthy
       rest:
         condition: service_healthy
+    # The config is filled in from the keys below at every start
+    # (templates/kong_start.sh), so no file holding them is mounted.
+    entrypoint: ["/bin/sh", "/home/kong/start.sh"]
     volumes:
-      - ./volumes/api/kong.yml:/home/kong/kong.yml:ro
+      - ./templates/kong.yml:/home/kong/kong.yml.template:ro
+      - ./templates/kong_start.sh:/home/kong/start.sh:ro
+    tmpfs:
+      - /run/kong:uid=1001,gid=1001,mode=0700
     environment:
+      PUBLISHABLE_KEY: ${PUBLISHABLE_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      ANON_KEY_ASYMMETRIC: ${ANON_KEY_ASYMMETRIC}
+      SERVICE_ROLE_KEY_ASYMMETRIC: ${SERVICE_ROLE_KEY_ASYMMETRIC}
       KONG_DATABASE: "off"
-      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DECLARATIVE_CONFIG: /run/kong/kong.yml
       KONG_ROUTER_FLAVOR: expressions
       KONG_DNS_ORDER: LAST,A,CNAME
       KONG_DNS_NOT_FOUND_TTL: 1

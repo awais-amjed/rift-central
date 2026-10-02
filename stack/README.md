@@ -52,7 +52,9 @@ Without `--domain` it is a local stack on `127.0.0.1:28000`, for testing.
 
 **Updating** is `git pull` and `./up.sh` again. Every migration file is safe to
 re-run, the containers that changed are recreated, and Kong and Caddy are
-restarted if their rendered config changed.
+restarted if their config changed. Kong's config holds the API keys, so it is
+never written to disk: `templates/kong.yml` is mounted as it is, and Kong
+fills the keys in from its environment at every start (`kong_start.sh`).
 
 ## What `up.sh` does, and why each part
 
