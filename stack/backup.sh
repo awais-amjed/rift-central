@@ -33,8 +33,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 source ./backup_remote.sh
 log() { echo "[backup] $*"; }
 
-# One run at a time: a slow upload must not meet the next hour's.
-exec 9>"${TMPDIR:-/tmp}/rift-central-backup.lock"
+# One run at a time: a slow upload must not meet the next hour's. The lock is
+# taken on this script, opened for reading, not on a file in /tmp: a lock file
+# left there by a run as the deploy user is one root may not open (Ubuntu's
+# fs.protected_regular), and every hourly run as root failed on it, silently,
+# from the first hand-run backup on.
+exec 9<"${BASH_SOURCE[0]}"
 flock -n 9 || { log "another backup is still running"; exit 0; }
 
 if [[ ${1:-} == --rules ]]; then
