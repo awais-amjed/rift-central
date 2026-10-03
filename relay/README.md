@@ -19,8 +19,9 @@ operator a re-enable — and the ones who didn't notice would silently stop
 waking anyone. Behind a name we own, the relay can move as often as it likes.
 
 Currently `https://push.joinrift.app`, live since 24 Aug 2026: a Cloudflare
-custom domain bound to `rift-push-relay`, forwarding to the Supabase edge
-function. The client checks the relay answers `GET` with `200` before writing
+custom domain bound to `rift-push-relay`, forwarding to `push_send` on central
+(`api.joinrift.app` since 3 Oct 2026; the managed Supabase project before
+that). The client checks the relay answers `GET` with `200` before writing
 the address into a server, so a record that has been moved or not yet made is a
 sentence on screen rather than months of undelivered pings.
 

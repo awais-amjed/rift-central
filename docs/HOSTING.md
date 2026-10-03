@@ -75,6 +75,18 @@ running as root, may not open (`fs.protected_regular = 2`). The lock is now
 taken on `backup.sh` itself, and a run by the timer's own service succeeded.
 Nothing watched for it, which is the monitoring this machine still lacks.
 
+The same day everything that talks to central was pointed at it: the app's
+`SupabaseConfig`, the admin site's `.env`, and the push relay's
+`RELAY_BACKEND`. Checked: the deployed Worker forwarding there, and a forged
+forward refused by the credential check in central's database; Auth accepting
+the app's publishable key and `is_handle_available` answering `anon`;
+`push_send` answering `ok` (it reads its whole configuration, the Firebase key
+included, when it starts, and stops without it); the admin site building with
+the new address in its CSP. Not yet: a real account and a real push through
+it. Accounts and backups on the managed project did not move, and a
+self-hosted server that turned push on against it has to turn it on again:
+its relay credential was enrolled there.
+
 ## Where central goes when it leaves
 
 Decided 24 September 2026, before the first real user, which is the only
@@ -212,6 +224,9 @@ own can be repointed at a self-hosted stack with a DNS change; a vendor URL
 cannot be repointed at all, and every install made before the switch is pinned
 to it for as long as that install survives. The add-on is worth buying before
 the first real user, not when the move is wanted.
+
+Answered by leaving instead: from 3 October 2026 the app names
+`api.joinrift.app`, a name we own.
 
 The push relay already solves this problem for itself, and the way it does so
 is not available here. `push.joinrift.app` is a **Cloudflare Worker** custom
