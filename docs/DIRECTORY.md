@@ -40,7 +40,7 @@ backups. So it has a report button and moderators.
 - **Anyone signed in reports** a listing from the directory in the app, with
   a reason from a short list and optional words. One open report per person
   per listing, twenty a day.
-- **Moderators work on the admin site** (`rift-admin`, its own domain), never
+- **Moderators work on the admin site** (on its own domain), never
   in the app. There they see each reported listing with its reports, what it
   said when reported, and who published it.
 - **Hide** takes a listing out of everyone's browse, drops its icon (the

@@ -19,9 +19,9 @@ you join. Central is for the things that can't live on somebody else's server:
 Relaying a push teaches central a device token and a moment — not the sender,
 the text, the server or the channel. The payload is empty.
 
-> **Status: in development.** The project runs it; this repository is not
-> something a self-hoster needs. To run your own server, see
-> `rift-self-host`.
+> The project runs central at `api.joinrift.app`. A self-hoster doesn't need
+> this repository: to run your own server, see
+> [`rift-self-host`](https://github.com/awais-amjed/rift-self-host).
 
 ## Run it locally
 
@@ -70,18 +70,17 @@ scripts/               the schema tests, and adding or removing a moderator
 ```
 
 Moderators are separate accounts with a second factor, managed with
-`scripts/add_admin.sh` and working on `rift-admin`, never in
+`scripts/add_admin.sh` and working on a separate moderation site, never in
 the app.
 
 ## Related repositories
 
 | Repository | What it is |
 |---|---|
-| `rift` | the app — Flutter client for desktop, mobile and web |
-| `rift-self-host` | a server anyone can run |
+| [`rift`](https://github.com/awais-amjed/rift) | the app — Flutter client for desktop, mobile and web |
+| [`rift-self-host`](https://github.com/awais-amjed/rift-self-host) | a server anyone can run |
 | **`rift-central`** | this: the optional shared service |
-| `rift-bot-sdk` | the TypeScript SDK for building bots |
-| `rift-admin` | the directory moderation dashboard |
+| [`rift-bot-sdk`](https://github.com/awais-amjed/rift-bot-sdk) | the TypeScript SDK for building bots |
 
 ## License
 

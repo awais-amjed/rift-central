@@ -46,7 +46,7 @@ as written, spaces included.
 - `{{ .ConfirmationURL }}` — the action link. Points at GoTrue's `/verify`,
   which consumes the token and then redirects to the address the client asked
   for. See `SupabaseConfig.emailConfirmationRedirect` in the Rift repo, and
-  `/email-confirmation/` in `rift-website` for where it lands.
+  `joinrift.app/email-confirmation/` for where it lands.
 - `{{ .Token }}` — the numeric code, for reauthentication.
 - `{{ .Email }}` — the account's address. In `change-email.html` this is the
   **old** one.
@@ -64,14 +64,14 @@ style. The `<style>` block holds only progressive enhancement: the
 remote images by default, so nothing an auth email needs may depend on one —
 branding that silently vanishes is exactly what a forgery looks like. So the
 lockup is split: `https://joinrift.app/assets/img/email-mark.png` for the
-mark — served by `rift-website`, where it lives — with an empty
+mark — served by the website, where it lives — with an empty
 `alt` because the word "Rift" is already the next cell, and plain text for
 the word. Blocked, the email loses a 26px square and keeps its name. What
 was there before was a flat gradient tile, which was never the logo — it just
 looked like something that had failed to load.
 
 The PNG is the same artwork as the website header's inline SVG, rendered at
-78px for a 26px slot, in `rift-website`:
+78px for a 26px slot, in the website's source:
 
 ```
 rsvg-convert -w 78 -h 78 -o assets/img/email-mark.png mark.svg

@@ -14,7 +14,7 @@ cd stack && ./setup.py --domain central.example.com --fcm key.json && ./up.sh
 
 Without `--domain` it is a local stack on `127.0.0.1:28000`. Proved locally on
 26 September 2026: all seven migrations apply and re-apply; moderator sign-in
-with a second factor, and its lockout, from `rift-admin`; the nightly sweep
+with a second factor, and its lockout, from the admin site; the nightly sweep
 and a push request from the database to their functions; `publish_server`
 refusing every internal address; confirmation email with Rift's template, its
 link confirming the account; TLS through Caddy (with its local issuer — a real
