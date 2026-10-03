@@ -3,42 +3,33 @@
 #
 #   scripts/add_admin.sh you@example.com "Your name"   # asks for a password
 #   scripts/add_admin.sh --remove you@example.com
-#   scripts/add_admin.sh --stack …                      # the self-hosted stack
 #
 # A moderator is its own account, not a Rift account: an auth user with a
 # password and no profile, listed in `central_admins` (001). This creates both
 # halves. The site then makes the new account set up an authenticator app on
 # its first sign-in, and central refuses every moderation call without it.
 #
-# The password is typed here and goes straight to Supabase Auth; nothing else
+# The password is typed here and goes straight to central's Auth; nothing else
 # sees it. Piped rather than typed when stdin is not a terminal, so it can be
 # scripted — never pass it as an argument, where it would land in the shell's
 # history and in `ps`.
 #
-# Two places central can be. By default, the managed project: that needs the
-# Supabase CLI logged in (its token is read from the system keyring) and
-# `secret-tool`; CENTRAL_REF picks the project. With `--stack`, the self-hosted
-# stack in `stack/`, run on the machine that hosts it: the secret key comes
-# from its `.env` and SQL goes to its database container. Both need `curl` and
+# Run on the machine that hosts the stack in `stack/`: the secret key comes
+# from its `.env` and SQL goes to its database container. Needs `curl` and
 # `python3`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REF="${CENTRAL_REF:-fjkrobvftxqqapvhgtuw}"
-URL="https://$REF.supabase.co"
-API="https://api.supabase.com/v1/projects/$REF"
 
 usage() {
-  sed -n '4,6p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '4,5p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
 remove=false
-stack=false
 while [[ ${1:-} == --* ]]; do
   case $1 in
     --remove) remove=true ;;
-    --stack) stack=true ;;
     *) usage ;;
   esac
   shift
@@ -51,53 +42,27 @@ name="${2:-Moderator}"
 # ── Credentials, held in variables only ─────────────────────
 env_value() { sed -n "s/^$1='\(.*\)'\$/\1/p" "$ROOT/stack/.env"; }
 
-if $stack; then
-  [[ -r $ROOT/stack/.env ]] || { echo "No stack/.env here — run stack/setup.py first." >&2; exit 1; }
-  # Kong on loopback, not the public address: this runs on the same machine.
-  URL="http://127.0.0.1:$(env_value KONG_PORT)"
-  secret=$(env_value SECRET_KEY)
-else
-  token=$(secret-tool search --all service "Supabase CLI" 2>/dev/null |
-    sed -n 's/^secret = //p' | head -1)
-  case "$token" in
-    go-keyring-base64:*) token=$(printf %s "${token#go-keyring-base64:}" | base64 -d) ;;
-  esac
-  [[ -n $token ]] || { echo "No Supabase CLI token in the keyring — run 'supabase login'." >&2; exit 1; }
-
-  # The Management API refuses curl's default user agent (Cloudflare 1010).
-  #
-  # Keys go to curl as a header file on a pipe rather than as `-H` arguments: an
-  # argument is readable by anyone on the machine, in `ps`, for as long as the
-  # request runs. `printf` is a builtin, so it never becomes a process of its own.
-  mgmt() { curl -sS -A rift-admin-script/1.0 -H @<(printf 'Authorization: Bearer %s\n' "$token") "$@"; }
-
-  secret=$(mgmt "$API/api-keys?reveal=true" | python3 -c '
-  import json, sys
-  keys = [k for k in json.load(sys.stdin) if k.get("type") == "secret"]
-  print(keys[0]["api_key"] if keys else "")')
-fi
-[[ -n $secret ]] || { echo "Could not read the project's secret key." >&2; exit 1; }
+[[ -r $ROOT/stack/.env ]] || { echo "No stack/.env here — run stack/setup.py first." >&2; exit 1; }
+# Kong on loopback, not the public address: this runs on the same machine.
+URL="http://127.0.0.1:$(env_value KONG_PORT)"
+secret=$(env_value SECRET_KEY)
+[[ -n $secret ]] || { echo "Could not read the stack's secret key." >&2; exit 1; }
 
 auth() { curl -sS -H @<(printf 'apikey: %s\n' "$secret") -H "Content-Type: application/json" "$@"; }
 
-# One statement in, and what the Management API would answer: a JSON array of
-# rows, `[]` for a statement that returns none, or the error.
+# One statement in, and what comes back: a JSON array of rows, `[]` for a
+# statement that returns none, or the error.
 sql() {
-  if $stack; then
-    local query out
-    query=$(cat)
-    if [[ $query == SELECT* ]]; then
-      query="SELECT coalesce(json_agg(r), '[]') FROM (${query%;}) r;"
-    fi
-    if out=$(printf '%s' "$query" |
-               docker exec -i central-db psql -U postgres -tAq -v ON_ERROR_STOP=1 2>&1); then
-      if [[ $query == SELECT* ]]; then printf '%s\n' "$out"; else echo "[]"; fi
-    else
-      printf '%s\n' "$out"
-    fi
+  local query out
+  query=$(cat)
+  if [[ $query == SELECT* ]]; then
+    query="SELECT coalesce(json_agg(r), '[]') FROM (${query%;}) r;"
+  fi
+  if out=$(printf '%s' "$query" |
+             docker exec -i central-db psql -U postgres -tAq -v ON_ERROR_STOP=1 2>&1); then
+    if [[ $query == SELECT* ]]; then printf '%s\n' "$out"; else echo "[]"; fi
   else
-    python3 -c 'import json, sys; print(json.dumps({"query": sys.stdin.read()}))' |
-      mgmt -X POST "$API/database/query" -H "Content-Type: application/json" --data @-
+    printf '%s\n' "$out"
   fi
 }
 
@@ -152,7 +117,7 @@ unset password again
 
 id=$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("id", ""))' <<<"$created")
 if [[ -z $id ]]; then
-  echo "Supabase refused the account:" >&2
+  echo "Auth refused the account:" >&2
   python3 -c 'import json, sys; d = json.load(sys.stdin); print(d.get("msg") or d.get("message") or d)' \
     <<<"$created" >&2
   exit 1

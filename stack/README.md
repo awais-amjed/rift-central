@@ -44,7 +44,7 @@ Without `--domain` it is a local stack on `127.0.0.1:28000`, for testing.
    writes the rows the database uses to call its own functions.
 7. **Backups** — see [Backups](#backups) below. Do this before anybody signs
    up.
-8. **A moderator:** `../scripts/add_admin.sh --stack you@example.com "Name"`,
+8. **A moderator:** `../scripts/add_admin.sh you@example.com "Name"`,
    then sign in on the admin site built against this domain.
 9. **Clients:** the app's `SupabaseConfig` and the admin site's `.env` take the
    new URL and `PUBLISHABLE_KEY` from `.env`. The push relay

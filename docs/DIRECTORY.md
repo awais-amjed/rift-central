@@ -70,13 +70,12 @@ is never called; on the self-hosted stack (`stack/`) it is on. Somebody holding
 the password can keep the real moderator locked out — the answer to that is a
 new password.
 
-Adding or removing one:
+Adding or removing one, on the machine that runs central's stack:
 
 ```bash
 ./scripts/add_admin.sh moderator@example.com "Their name"   # asks for a password
 ./scripts/add_admin.sh --remove moderator@example.com
-./scripts/add_admin.sh --stack …        # the same, on the self-hosted stack
 ```
 
-Use an address with no Rift account. The script reads the Supabase CLI's token
-from the keyring and never takes the password as an argument.
+Use an address with no Rift account. The script reads the stack's secret key
+from `stack/.env` and never takes the password as an argument.
