@@ -4,11 +4,12 @@ import { createClient } from "@supabase/supabase-js";
 /**
  * Deletes the blobs the database says nothing points at any more.
  *
- * Two buckets, one call. DM attachments whose messages retention has removed,
- * and directory icons no listing names — the second rides along rather than
- * getting a function of its own because it would need the same secret, the
- * same config row and a second entry in the same cron job to do the same
- * thing: ask the database what is unreferenced and hand the list to Storage.
+ * Three buckets, one call. DM attachments whose messages retention has
+ * removed, directory icons no listing names, and bug report logs whose report
+ * is gone — the last two ride along rather than getting functions of their
+ * own because each would need the same secret, the same config row and
+ * another entry in the same cron job to do the same thing: ask the database
+ * what is unreferenced and hand the list to Storage.
  *
  * Called once a day by the database, never by clients. The
  * database decides which blobs — `expired_dm_attachments()` —
@@ -22,6 +23,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const BUCKET = "central-dm-attachments";
 const ICON_BUCKET = "directory-icons";
+const BUG_REPORT_BUCKET = "bug-reports";
 
 /** Blobs per database query and per Storage API call. */
 const BATCH = 1000;
@@ -55,18 +57,23 @@ Deno.serve(async (req) => {
   // nobody sees, while a DM blob left behind is storage somebody pays for.
   const icons = await drain(ICON_BUCKET, "expired_directory_icons");
   const iconsSwept = "error" in icons ? 0 : icons.swept;
+  // The same for a bug report's logs, which retention leaves behind when it
+  // deletes the report after 90 days.
+  const logs = await drain(BUG_REPORT_BUCKET, "expired_bug_report_files");
+  const logsSwept = "error" in logs ? 0 : logs.swept;
 
   console.log(
-    `[sweep] removed ${attachments.swept} expired attachment(s), ${iconsSwept} unused icon(s)`,
+    `[sweep] removed ${attachments.swept} expired attachment(s), ${iconsSwept} unused icon(s), ` +
+      `${logsSwept} expired bug report log(s)`,
   );
-  return json({ swept: attachments.swept, icons: iconsSwept });
+  return json({ swept: attachments.swept, icons: iconsSwept, logs: logsSwept });
 });
 
 /**
  * Empty one bucket of whatever [rpc] says is unreferenced, a batch at a time.
  *
- * Both RPCs answer the same shape — an array of object names — because both
- * are asking the same question of different tables, so one loop serves both.
+ * Every RPC answers the same shape — an array of object names — because each
+ * asks the same question of different tables, so one loop serves them all.
  */
 async function drain(
   bucket: string,

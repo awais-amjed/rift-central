@@ -14,6 +14,7 @@ you join. Central is for the things that can't live on somebody else's server:
 | Friends, blocks, direct messages | Between people who share no server yet |
 | The public server and bot directories | Opt-in listings, so a server or a bot can be found |
 | Directory moderation | Reports, and moderators who can hide a listing |
+| Bug reports | What someone sends from the app's Report a bug, with its logs; read by moderators on the admin site, deleted after 90 days |
 | The push relay | A phone's push token belongs to the app's Firebase project, so a self-hosted server can't wake its own members' phones and has to ask |
 
 Relaying a push teaches central a device token and a moment — not the sender,
@@ -62,7 +63,7 @@ that nobody granted on purpose. It never touches a real project.
 
 ```
 migrations/            the schema, policies and functions, split by kind
-supabase/functions/    edge functions: publishing a server, sending a push, sweeping old files
+supabase/functions/    edge functions: publishing a server, sending a push, sweeping old files and logs
 relay/                 the push relay's hosts — Node, Cloudflare, or the function
 stack/                 central as containers: compose, setup, deploy guide, backups
 email-templates/       the account emails Auth sends, and why they are built as they are

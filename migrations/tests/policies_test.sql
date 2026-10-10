@@ -2451,6 +2451,214 @@ BEGIN
 END $$;
 
 RESET ROLE;
+
+-- ============================================================
+-- Bug reports (008)
+-- ============================================================
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
+DO $$
+DECLARE
+  v_id    UUID;
+  v_other UUID := gen_random_uuid();
+  v_bob   TEXT := 'cccc0000-0000-4000-8000-000000000002';
+BEGIN
+  v_id := submit_bug_report('  The share stopped when the game opened  ',
+                            '1.4.0-beta.6+12', 'windows 10');
+  PERFORM set_config('test.bug_report', v_id::text, true);
+
+  BEGIN
+    PERFORM 1 FROM bug_reports;
+    RAISE EXCEPTION 'FAIL: a member can read bug reports';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  -- Own folder, own report: up to the file limit.
+  FOR i IN 1..4 LOOP  -- bug_report_file_limit(), which members cannot call
+    INSERT INTO storage.objects (bucket_id, name, owner)
+    VALUES ('bug-reports', v_bob || '/' || v_id || '/rift-' || i || '.log.gz',
+            v_bob::uuid);
+  END LOOP;
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner)
+    VALUES ('bug-reports', v_bob || '/' || v_id || '/one-more.log.gz', v_bob::uuid);
+    RAISE EXCEPTION 'FAIL: a report took more files than its limit';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  -- A report that is not bob's, or no report at all.
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner)
+    VALUES ('bug-reports', v_bob || '/' || v_other || '/x.log.gz', v_bob::uuid);
+    RAISE EXCEPTION 'FAIL: a file went under a report that does not exist';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner)
+    VALUES ('bug-reports', 'cccc0000-0000-4000-8000-000000000001/' || v_id || '/x.log.gz',
+            v_bob::uuid);
+    RAISE EXCEPTION 'FAIL: a file went into someone else''s folder';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner)
+    VALUES ('bug-reports', v_bob || '/loose.log.gz', v_bob::uuid);
+    RAISE EXCEPTION 'FAIL: a file went in outside any report';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  BEGIN
+    PERFORM moderation_bug_reports();
+    RAISE EXCEPTION 'FAIL: a member read the bug reports';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM moderation_resolve_bug_report(v_id, TRUE);
+    RAISE EXCEPTION 'FAIL: a member resolved a bug report';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM submit_bug_report('   ', '1.4.0', 'linux');
+    RAISE EXCEPTION 'FAIL: an empty report was accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  RAISE NOTICE 'ok  a member sends a report and its files into their own folder, and reads nothing';
+END $$;
+
+-- Alice can see none of bob's files; bob can see his own.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000001","role":"authenticated"}', true); END $$;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'bug-reports') THEN
+    RAISE EXCEPTION 'FAIL: a member can see another member''s bug report files';
+  END IF;
+  RAISE NOTICE 'ok  a report''s files are hidden from other members';
+END $$;
+
+-- A report's folder takes nothing once its hour is up.
+RESET ROLE;
+UPDATE bug_reports SET created_at = now() - INTERVAL '2 hours';
+DELETE FROM storage.objects
+ WHERE bucket_id = 'bug-reports' AND name LIKE '%/rift-4.log.gz';
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+DO $$
+DECLARE v_id TEXT := current_setting('test.bug_report');
+BEGIN
+  IF (SELECT count(*) FROM storage.objects WHERE bucket_id = 'bug-reports') <> 3 THEN
+    RAISE EXCEPTION 'FAIL: the reporter cannot read their own files back';
+  END IF;
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner)
+    VALUES ('bug-reports', 'cccc0000-0000-4000-8000-000000000002/' || v_id || '/late.log.gz',
+            'cccc0000-0000-4000-8000-000000000002');
+    RAISE EXCEPTION 'FAIL: a report took a file after its hour';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  -- Ten a day; the one sent above has aged out of the day's count only if
+  -- it is a day old, so it still counts.
+  FOR i IN 2..10 LOOP  -- daily_bug_report_quota()
+    PERFORM submit_bug_report('again ' || i, '1.4.0', 'linux');
+  END LOOP;
+  BEGIN
+    PERFORM submit_bug_report('one too many', '1.4.0', 'linux');
+    RAISE EXCEPTION 'FAIL: the daily ceiling let an eleventh report through';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'bug_report_limit_reached' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a report takes files for an hour, and ten reports a day';
+END $$;
+
+-- The moderator reads them with a second factor, and only with one.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal1"}', true); END $$;
+DO $$
+BEGIN
+  BEGIN
+    PERFORM moderation_bug_reports();
+    RAISE EXCEPTION 'FAIL: a moderator read bug reports without the second factor';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'bug-reports') THEN
+    RAISE EXCEPTION 'FAIL: a moderator read bug report files without the second factor';
+  END IF;
+  RAISE NOTICE 'ok  bug reports need the moderator''s second factor';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
+DO $$
+DECLARE
+  v_id   TEXT := current_setting('test.bug_report');
+  v_list JSONB;
+  v_one  JSONB;
+BEGIN
+  v_list := moderation_bug_reports();
+  IF jsonb_array_length(v_list) <> 10 THEN
+    RAISE EXCEPTION 'FAIL: the moderator saw % reports', jsonb_array_length(v_list);
+  END IF;
+  SELECT r INTO v_one FROM jsonb_array_elements(v_list) r WHERE r ->> 'id' = v_id;
+  IF v_one ->> 'description' <> 'The share stopped when the game opened'
+     OR v_one ->> 'reporter_handle' <> 'bob_test'
+     OR jsonb_array_length(v_one -> 'files') <> 3 THEN
+    RAISE EXCEPTION 'FAIL: a report read back wrong: %', v_one;
+  END IF;
+  IF (SELECT count(*) FROM storage.objects WHERE bucket_id = 'bug-reports') <> 3 THEN
+    RAISE EXCEPTION 'FAIL: the moderator cannot read the files';
+  END IF;
+
+  PERFORM moderation_resolve_bug_report(v_id::uuid, TRUE);
+  v_list := moderation_bug_reports();
+  IF v_list -> -1 ->> 'id' <> v_id OR v_list -> -1 ->> 'resolved_by' <> 'Erin' THEN
+    RAISE EXCEPTION 'FAIL: a resolved report did not sink to the end: %', v_list -> -1;
+  END IF;
+  PERFORM moderation_resolve_bug_report(v_id::uuid, FALSE);
+  IF (SELECT r ->> 'resolved_at' FROM jsonb_array_elements(moderation_bug_reports()) r
+       WHERE r ->> 'id' = v_id) IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: a report could not be opened again';
+  END IF;
+  RAISE NOTICE 'ok  a moderator reads every report and its files, and resolves them';
+END $$;
+
+-- Retention: a report past 90 days goes, and its files are then the sweep's.
+RESET ROLE;
+DO $$
+DECLARE
+  v_id  TEXT := current_setting('test.bug_report');
+  v_job TEXT;
+BEGIN
+  SELECT command INTO v_job FROM cron.job WHERE jobname = 'central-bug-report-retention';
+  IF v_job IS NULL THEN
+    RAISE EXCEPTION 'FAIL: no retention job for bug reports';
+  END IF;
+  IF EXISTS (SELECT 1 FROM expired_bug_report_files()) THEN
+    RAISE EXCEPTION 'FAIL: files of a live report were offered to the sweep';
+  END IF;
+  UPDATE bug_reports SET created_at = now() - INTERVAL '91 days' WHERE id = v_id::uuid;
+  UPDATE storage.objects SET created_at = now() - INTERVAL '91 days'
+   WHERE bucket_id = 'bug-reports';
+  EXECUTE v_job;
+  IF EXISTS (SELECT 1 FROM bug_reports WHERE id = v_id::uuid) THEN
+    RAISE EXCEPTION 'FAIL: retention kept a report past 90 days';
+  END IF;
+  IF (SELECT count(*) FROM expired_bug_report_files()) <> 3 THEN
+    RAISE EXCEPTION 'FAIL: the sweep was not offered the expired report''s files';
+  END IF;
+  IF has_function_privilege('authenticated',
+       'expired_bug_report_files(integer, interval)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: a member can list expired bug report files';
+  END IF;
+  RAISE NOTICE 'ok  reports go after 90 days and their files go to the sweep';
+END $$;
+
+RESET ROLE;
 SET LOCAL ROLE authenticated;
 
 ROLLBACK;
