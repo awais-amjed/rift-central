@@ -31,12 +31,14 @@ the device — a web page setting it directly would leave an account the client 
 to again. A link would also have landed on `/email-confirmation/`, which says the email was
 confirmed, which is not what happened.
 
-Only three of these can fire today. Signup confirmation is the one that
-matters; the password-changed notification is enabled and sends itself; email
-change is reachable because `mailer_secure_email_change_enabled` is on. Magic
-link, invite and reauthentication are unused — Rift signs in with a password —
-and they are here so that turning one on later does not put an unstyled email
-in front of somebody.
+Five of these can fire today. Signup confirmation is the one that matters;
+reset password carries the code for account recovery; reauthentication carries
+the code the app asks for before changing a password, including a forgotten one
+on a device still signed in; the password-changed notification is enabled and
+sends itself; email change is reachable because
+`mailer_secure_email_change_enabled` is on. Magic link and invite are unused —
+Rift signs in with a password — and they are here so that turning one on later
+does not put an unstyled email in front of somebody.
 
 ## Variables
 
