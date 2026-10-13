@@ -22,7 +22,7 @@ name: rift-central
 services:
   kong:
     container_name: central-kong
-    image: kong/kong:3.9.3
+    image: kong/kong:3.9.4
     restart: unless-stopped
     ports:
       - "127.0.0.1:${KONG_PORT:-28000}:8000"
@@ -173,7 +173,7 @@ services:
 
   rest:
     container_name: central-rest
-    image: postgrest/postgrest:v16.3
+    image: postgrest/postgrest:v16.4
     restart: unless-stopped
     depends_on:
       db:
@@ -200,7 +200,7 @@ services:
   realtime:
     # The name is parsed for the tenant id, so the subdomain part matters.
     container_name: realtime-dev.central-realtime
-    image: supabase/realtime:v2.137.3
+    image: supabase/realtime:v2.143.3
     restart: unless-stopped
     depends_on:
       db:
@@ -241,7 +241,7 @@ services:
 
   storage:
     container_name: central-storage
-    image: supabase/storage-api:v1.79.4
+    image: supabase/storage-api:v1.81.3
     restart: unless-stopped
     depends_on:
       db:
@@ -275,7 +275,7 @@ services:
 
   functions:
     container_name: central-functions
-    image: supabase/edge-runtime:v1.76.2
+    image: supabase/edge-runtime:v1.77.4
     restart: unless-stopped
     depends_on:
       kong:
@@ -336,7 +336,7 @@ services:
 
   db:
     container_name: central-db
-    image: supabase/postgres:17.6.1.173
+    image: supabase/postgres:17.11.0.004
     restart: unless-stopped
     volumes:
       - ./volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
