@@ -82,7 +82,7 @@ the app.
 | [`rift-self-host`](https://github.com/awais-amjed/rift-self-host) | a server anyone can run |
 | **`rift-central`** | this: the optional shared service |
 | [`rift-bot-sdk-node`](https://github.com/awais-amjed/rift-bot-sdk-node) | the TypeScript SDK for building bots |
-| [`rift-bot-sdk-rust`](https://github.com/awais-amjed/rift-bot-sdk-rust) | the Rust SDK for building bots, whose bots play in stereo |
+| [`rift-bot-sdk-rust`](https://github.com/awais-amjed/rift-bot-sdk-rust) | the Rust SDK for building bots |
 
 ## License
 
