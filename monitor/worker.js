@@ -30,10 +30,10 @@ const ANSWER_WITHIN_MS = 10_000;
 const BACKUP_CRON = "30 * * * *";
 
 /**
- * Once a day, at 9 AM in Karachi: a post saying the monitor still runs, so a
+ * Once a day, at 9 PM in Karachi: a post saying the monitor still runs, so a
  * quiet channel means central is fine rather than that nothing is watching.
  */
-const DAILY_CRON = "0 4 * * *";
+const DAILY_CRON = "0 16 * * *";
 
 /** The hourly dumps (stack/backup.sh): folder names readable, file names not. */
 const DUMPS = "db/hourly/";
