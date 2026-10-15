@@ -1,0 +1,37 @@
+# The central monitor (README.md beside this). No route and no workers.dev
+# address: nothing calls it, it only calls out.
+name = "rift-central-monitor"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+workers_dev = false
+
+[triggers]
+# Central every minute; the backups at half past (BACKUP_CRON in worker.js).
+crons = ["* * * * *", "30 * * * *"]
+
+[vars]
+CENTRAL_URL = "https://api.joinrift.app"
+# The same publishable key every Rift install carries (SupabaseConfig).
+CENTRAL_KEY = "sb_publishable_tYndCjF4AXpJ3zwrefpGNpwt0YrpiHOA"
+ALERT_FROM = "monitor@joinrift.app"
+TIME_ZONE = "Asia/Karachi"
+# Secrets, set with `wrangler secret put` (README.md): RIFT_WEBHOOK_URL, ALERT_TO.
+
+[[durable_objects.bindings]]
+name = "WATCH"
+class_name = "Watch"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Watch"]
+
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "rift-central-backups"
+jurisdiction = "eu"
+
+[[send_email]]
+name = "EMAIL"
+
+[observability]
+enabled = true

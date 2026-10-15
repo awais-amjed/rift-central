@@ -17,3 +17,6 @@ stack/.env
 stack/volumes/api/
 stack/volumes/caddy/
 stack/volumes/.loaded
+
+# The monitor's local secrets, for `wrangler dev`.
+.dev.vars

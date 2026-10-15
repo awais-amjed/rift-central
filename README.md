@@ -57,6 +57,7 @@ that nobody granted on purpose. It never touches a real project.
 | [`docs/DIRECTORY.md`](docs/DIRECTORY.md) | how the two directories are governed and moderated |
 | [`docs/DEVELOPING.md`](docs/DEVELOPING.md) | the layout, and how the schema is tested |
 | [`relay/README.md`](relay/README.md) | the push relay, and where it can run |
+| [`monitor/README.md`](monitor/README.md) | the Worker that says when central or its backups stop |
 | [`email-templates/README.md`](email-templates/README.md) | the account emails, and what renders them |
 
 ## What's in here
@@ -65,6 +66,7 @@ that nobody granted on purpose. It never touches a real project.
 migrations/            the schema, policies and functions, split by kind
 supabase/functions/    edge functions: publishing a server, sending a push, sweeping old files and logs
 relay/                 the push relay's hosts — Node, Cloudflare, or the function
+monitor/               a Cloudflare Worker that checks central and its backups and alerts the owner
 stack/                 central as containers: compose, setup, deploy guide, backups
 email-templates/       the account emails Auth sends, and why they are built as they are
 scripts/               the schema tests, and adding or removing a moderator

@@ -73,7 +73,10 @@ found to have failed on every run since the first one by hand on 29 September:
 that run left its lock file in `/tmp` owned by the deploy user, which the timer,
 running as root, may not open (`fs.protected_regular = 2`). The lock is now
 taken on `backup.sh` itself, and a run by the timer's own service succeeded.
-Nothing watched for it, which is the monitoring this machine still lacks.
+Nothing watched for it. Nothing did on 9 October either, when Contabo's
+network cut the machine off for about seven and a half hours while it stayed
+up. `monitor/` now watches for both from Cloudflare (built and tested
+locally 15 October 2026; not yet deployed).
 
 The same day everything that talks to central was pointed at it: the app's
 `SupabaseConfig`, the admin site's `.env`, and the push relay's
