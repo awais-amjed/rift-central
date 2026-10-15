@@ -9,7 +9,7 @@ you join. Central is for the things that can't live on somebody else's server:
 
 | What | Why it's central |
 |---|---|
-| Accounts and handles | One namespace, so a handle means one person |
+| Accounts and handles | One namespace, so a handle means one person; moderators on the admin site see the list, with each account's email and when it was last active |
 | Encrypted vault backups | Ciphertext only; the key never leaves the device |
 | Friends, blocks, direct messages | Between people who share no server yet |
 | The public server and bot directories | Opt-in listings, so a server or a bot can be found |

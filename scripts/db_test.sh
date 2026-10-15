@@ -61,7 +61,21 @@ psql_migrate <<'SQL' >/dev/null
 CREATE SCHEMA IF NOT EXISTS auth;
 -- pg_net is installed here, and the push functions name it in search_path.
 CREATE SCHEMA IF NOT EXISTS extensions;
-CREATE TABLE IF NOT EXISTS auth.users (id UUID PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS auth.users (
+  id                 UUID PRIMARY KEY,
+  email              VARCHAR(255),
+  created_at         TIMESTAMPTZ DEFAULT now(),
+  email_confirmed_at TIMESTAMPTZ,
+  last_sign_in_at    TIMESTAMPTZ
+);
+-- GoTrue's, with its one column that has no zone.
+CREATE TABLE IF NOT EXISTS auth.sessions (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID NOT NULL,
+  created_at   TIMESTAMPTZ DEFAULT now(),
+  updated_at   TIMESTAMPTZ DEFAULT now(),
+  refreshed_at TIMESTAMP
+);
 
 -- Exactly Supabase's own: nullif BEFORE the cast, or an empty setting — which
 -- is what a RESET leaves behind — raises instead of reading as "nobody".

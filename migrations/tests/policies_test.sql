@@ -2658,6 +2658,63 @@ BEGIN
   RAISE NOTICE 'ok  reports go after 90 days and their files go to the sweep';
 END $$;
 
+-- ── The accounts list ───────────────────────────────────────
+-- Every Rift account, with when it was last active, for a moderator only.
+RESET ROLE;
+UPDATE auth.users SET email = 'alice@example.com', email_confirmed_at = now(),
+       last_sign_in_at = now() - INTERVAL '10 days'
+ WHERE id = 'cccc0000-0000-4000-8000-000000000001';
+-- Signed in ten days ago, refreshed an hour ago: active an hour ago.
+INSERT INTO auth.sessions (user_id, updated_at, refreshed_at) VALUES
+  ('cccc0000-0000-4000-8000-000000000001', now() - INTERVAL '2 days',
+   (now() - INTERVAL '1 hour') AT TIME ZONE 'UTC');
+SET LOCAL ROLE authenticated;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+DO $$
+BEGIN
+  BEGIN
+    PERFORM moderation_accounts();
+    RAISE EXCEPTION 'FAIL: a member read the accounts list';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  IF has_function_privilege('anon', 'moderation_accounts()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: anon can call moderation_accounts';
+  END IF;
+  RAISE NOTICE 'ok  only a moderator reads the accounts list';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
+DO $$
+DECLARE
+  v_list  JSONB := moderation_accounts();
+  v_alice JSONB;
+BEGIN
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_list) r
+              WHERE r ->> 'id' = 'cccc0000-0000-4000-8000-0000000000e1') THEN
+    RAISE EXCEPTION 'FAIL: a moderator account is listed as a Rift account';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_list) r
+                  WHERE r ->> 'id' = 'cccc0000-0000-4000-8000-000000000003'
+                    AND r -> 'handle' = 'null'::jsonb) THEN
+    RAISE EXCEPTION 'FAIL: an account without a handle is missing';
+  END IF;
+  SELECT r INTO v_alice FROM jsonb_array_elements(v_list) r
+   WHERE r ->> 'id' = 'cccc0000-0000-4000-8000-000000000001';
+  IF v_alice ->> 'handle' IS DISTINCT FROM 'alice_test'
+     OR v_alice ->> 'email' IS DISTINCT FROM 'alice@example.com'
+     OR (v_alice ->> 'sessions')::int <> 1 THEN
+    RAISE EXCEPTION 'FAIL: alice''s row is wrong: %', v_alice;
+  END IF;
+  IF (v_alice ->> 'last_active_at')::timestamptz < now() - INTERVAL '2 hours' THEN
+    RAISE EXCEPTION 'FAIL: last active ignored a session refresh: %', v_alice ->> 'last_active_at';
+  END IF;
+  RAISE NOTICE 'ok  a moderator lists Rift accounts, last active from their sessions';
+END $$;
+
 RESET ROLE;
 SET LOCAL ROLE authenticated;
 
