@@ -54,8 +54,9 @@ Once, in the Cloudflare dashboard:
 
 1. **Email Routing** on joinrift.app (Email → Email Routing). It adds an MX
    and an SPF record to the apex, which has neither.
-2. Under its **Destination addresses**, add the owner's address and click
-   the link Cloudflare sends. Email Routing sends only to a verified one.
+2. Under its **Destination addresses**, add each address the alerts go to
+   and click the link Cloudflare sends. Email Routing sends only to a
+   verified one.
 
 Then, from this folder, logged in with `wrangler login` (it needs Workers,
 R2 and Email Routing):
@@ -63,7 +64,7 @@ R2 and Email Routing):
 ```
 wrangler deploy
 secret-tool lookup service rift-monitor-webhook | wrangler secret put RIFT_WEBHOOK_URL
-printf %s 'owner@example.com' | wrangler secret put ALERT_TO
+printf %s 'one@example.com,two@example.com' | wrangler secret put ALERT_TO
 ```
 
 The webhook belongs to a private channel on the owner's own server, not

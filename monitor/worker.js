@@ -145,14 +145,19 @@ async function post(env, { text }) {
 }
 
 /**
- * An email through Cloudflare Email Routing, which sends only to an address
- * verified on the account, from one on a zone it routes for.
+ * An email to each address in ALERT_TO (comma-separated), through Cloudflare
+ * Email Routing, which sends only to addresses verified on the account, from
+ * one on a zone it routes for, and to one recipient per message.
  */
 async function email(env, { subject, text }) {
-  if (!env.ALERT_TO) return;
+  const to = (env.ALERT_TO ?? "").split(",").map((a) => a.trim()).filter(Boolean);
+  await Promise.all(to.map((address) => emailOne(env, address, subject, text)));
+}
+
+async function emailOne(env, to, subject, text) {
   const raw = [
     `From: Rift monitor <${env.ALERT_FROM}>`,
-    `To: ${env.ALERT_TO}`,
+    `To: ${to}`,
     `Subject: ${subject}`,
     `Date: ${new Date().toUTCString()}`,
     `Message-ID: <${crypto.randomUUID()}@${env.ALERT_FROM.split("@")[1]}>`,
@@ -164,8 +169,8 @@ async function email(env, { subject, text }) {
     "",
   ].join("\r\n");
   try {
-    await env.EMAIL.send(new EmailMessage(env.ALERT_FROM, env.ALERT_TO, raw));
+    await env.EMAIL.send(new EmailMessage(env.ALERT_FROM, to, raw));
   } catch (e) {
-    console.error(`[monitor] email not sent: ${e.message}`);
+    console.error(`[monitor] email to one address not sent: ${e.message}`);
   }
 }
