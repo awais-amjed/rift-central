@@ -1,7 +1,8 @@
 # Email templates
 
-The account emails Supabase sends, styled to match joinrift.app instead of
-GoTrue's defaults.
+The account emails Supabase sends, styled to match the app instead of
+GoTrue's defaults: one card on a light ground, in the app's Indigo palette,
+type scale and radii.
 
 They live with central because central is what sends them, and they are
 kept as files because they are the only part of Rift's design that renders
@@ -60,7 +61,7 @@ as written, spaces included.
 ignores most of a stylesheet, and Gmail strips `<style>` outright in some
 configurations. Anything that must be right is an attribute or an inline
 style. The `<style>` block holds only progressive enhancement: the
-`color-scheme` declaration and one width breakpoint.
+`color-scheme` declaration, one width breakpoint and the dark colours.
 
 **The mark is an image; the word beside it is text.** Most clients block
 remote images by default, so nothing an auth email needs may depend on one —
@@ -84,21 +85,26 @@ addresses it by that URL, and Gmail proxies and
 caches it on terms of its own — replace the artwork in place and expect both
 versions to be live for a while.
 
-**The panel fills the width; the text inside it does not.** A narrow column
-leaves most of the message pane as empty background, which reads as an email
-that failed to load rather than a deliberately small one. So the panel is
-100% wide and the copy inside is capped at 520px — long centred lines are
-what stop reading well, not the panel around them.
+**One card, 560px at most.** Everything the email says sits on a single
+card, the app's content panel, on the app's canvas colour. Left-aligned,
+like the app, so the text reads as a message rather than a poster.
 
-**The greys are lighter than the website's.** Gmail and Outlook both lift a dark
-background a few shades before they paint on it, which quietly eats the
-contrast a palette was chosen for. Body text, fine print and footer all sit a
-step brighter here than the same roles do on the web.
+**Light first, dark where the client asks.** Light is what every client
+draws. Apple Mail, iOS Mail and Outlook for Mac also honour
+`prefers-color-scheme`, and get the app's dark palette from classes in the
+`<style>` block. Gmail ignores that and recolours by itself, which a light
+email survives better than a dark one. The button is the light theme's accent
+in both, because the dark theme's lighter one would leave its white label
+below 4.5:1. Every background is also set as a `bgcolor` attribute, because
+Outlook ignores the CSS one.
 
-**Dark, and declared as such.** `color-scheme: dark` tells Apple Mail and
-Gmail not to run their own inversion over an email that is already dark, which
-is what produces the grey-on-grey result otherwise. Every background is also
-set as a `bgcolor` attribute, because Outlook ignores the CSS one.
+**No web font.** The family names Geist first, so a device that has it uses
+it, but nothing is loaded: a font fetched from a server is one more request
+made when the email is opened, and the system face holds the layout as well.
+
+**No colour in a notice.** The boxes recessed into the card (a code, the
+recovery-key and not-you notices) are the inset grey with a hairline. They
+are information the reader acts on, not an alarm.
 
 **The button is drawn twice.** Word ignores `border-radius` and padding on an
 anchor, so Outlook gets a VML rectangle and everything else gets the real
