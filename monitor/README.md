@@ -58,8 +58,8 @@ Once, in the Cloudflare dashboard:
    and click the link Cloudflare sends. Email Routing sends only to a
    verified one.
 
-Then, from this folder, logged in with `wrangler login` (it needs Workers,
-R2 and Email Routing):
+Then, from this folder, with wrangler logged in or `CLOUDFLARE_API_TOKEN`
+set (Workers, plus R2 read: the deploy checks the bucket exists):
 
 ```
 wrangler deploy
@@ -72,7 +72,9 @@ central, which is what lets it be heard with central down. Its URL holds its
 secret, so it lives in the keyring and reaches wrangler on stdin.
 
 The first run with both secrets set posts and emails "Central monitor is
-on", which is the test that both ways out work.
+on", which is the test that both ways out work. Verified 15 October 2026 for
+joinrift.app: the post and both emails arrived, the email in the inbox
+rather than spam. Not yet seen live: a real down, up or backup alert.
 
 ## Trying it locally
 

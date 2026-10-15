@@ -75,8 +75,9 @@ running as root, may not open (`fs.protected_regular = 2`). The lock is now
 taken on `backup.sh` itself, and a run by the timer's own service succeeded.
 Nothing watched for it. Nothing did on 9 October either, when Contabo's
 network cut the machine off for about seven and a half hours while it stayed
-up. `monitor/` now watches for both from Cloudflare (built and tested
-locally 15 October 2026; not yet deployed).
+up. `monitor/` now watches for both from Cloudflare: deployed 15 October
+2026, its first message checked arriving in the owner's Rift channel and
+both inboxes.
 
 The same day everything that talks to central was pointed at it: the app's
 `SupabaseConfig`, the admin site's `.env`, and the push relay's
