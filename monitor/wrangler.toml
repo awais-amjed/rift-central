@@ -6,8 +6,9 @@ compatibility_date = "2026-08-01"
 workers_dev = false
 
 [triggers]
-# Central every minute; the backups at half past (BACKUP_CRON in worker.js).
-crons = ["* * * * *", "30 * * * *"]
+# Central every minute; the backups at half past; a daily post at 9 AM in
+# Karachi (BACKUP_CRON and DAILY_CRON in worker.js).
+crons = ["* * * * *", "30 * * * *", "0 4 * * *"]
 
 [vars]
 CENTRAL_URL = "https://api.joinrift.app"

@@ -72,6 +72,18 @@ export function stepBackups(state, newest, now) {
   return { state: s, alert: null };
 }
 
+/**
+ * The day's count for the daily post: checks run, checks that failed, and
+ * outages declared, since [since].
+ */
+export function tally(state, failed, alert, now) {
+  const t = { since: now, checks: 0, failed: 0, outages: 0, ...state };
+  t.checks += 1;
+  if (failed.length) t.failed += 1;
+  if (alert?.kind === "down") t.outages += 1;
+  return t;
+}
+
 // ── Words ─────────────────────────────────────────────────
 
 /** "2:02 PM" in [timeZone]. */
@@ -136,6 +148,37 @@ export function words(alert, now, timeZone) {
           `Backups are running again: the newest one in R2 was uploaded at ` +
           `${at(alert.newest)}.`,
       };
+    case "daily": {
+      const { tally: t, central, newest } = alert;
+      const lines = [
+        central?.down
+          ? `Daily check: central is down, since ${at(central.downSince)}.`
+          : "Daily check: central is up.",
+      ];
+      if (t) {
+        const checks = t.checks.toLocaleString("en-US");
+        const outages =
+          t.outages === 0
+            ? "no outage"
+            : t.outages === 1
+              ? "1 outage"
+              : `${t.outages} outages`;
+        lines.push(
+          t.failed === 0
+            ? `All ${checks} checks in the last ${span(now - t.since)} passed.`
+            : `${t.failed.toLocaleString("en-US")} of ${checks} checks in the ` +
+                `last ${span(now - t.since)} failed (${outages}).`,
+        );
+      }
+      lines.push(
+        newest instanceof Error
+          ? `Backups: can't read the bucket (${newest.message}).`
+          : newest == null
+            ? "Backups: none in R2."
+            : `Newest backup: ${at(newest)} (${span(now - newest)} ago).`,
+      );
+      return { subject: "Central daily check", text: lines.join("\n") };
+    }
     case "started":
       return {
         subject: "Central monitor is on",

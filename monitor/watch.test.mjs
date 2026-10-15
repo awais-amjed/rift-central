@@ -6,6 +6,7 @@ import {
   span,
   stepBackups,
   stepCentral,
+  tally,
   words,
 } from "./watch.mjs";
 
@@ -100,4 +101,48 @@ test("spans", () => {
   assert.equal(span(125 * MIN), "2 h 5 min");
   assert.equal(span(7.5 * 60 * MIN), "7 h 30 min");
   assert.equal(span(76 * 60 * MIN), "3 days 4 h");
+});
+
+test("the day's tally", () => {
+  let t;
+  t = tally(t, [], null, T0);
+  t = tally(t, bad, null, T0 + MIN);
+  t = tally(t, bad, { kind: "down" }, T0 + 2 * MIN);
+  assert.deepEqual(t, { since: T0, checks: 3, failed: 2, outages: 1 });
+});
+
+test("the daily post", () => {
+  const day = 24 * 60 * MIN;
+  const now = T0 + day;
+  const fine = words(
+    {
+      kind: "daily",
+      tally: { since: T0, checks: 1440, failed: 0, outages: 0 },
+      central: { down: false },
+      newest: now - 53 * MIN,
+    },
+    now,
+    "Asia/Karachi",
+  );
+  assert.equal(
+    fine.text,
+    "Daily check: central is up.\nAll 1,440 checks in the last 24 h passed.\n" +
+      "Newest backup: 12:53 PM (53 min ago).",
+  );
+  const rough = words(
+    {
+      kind: "daily",
+      tally: { since: T0, checks: 1440, failed: 3, outages: 0 },
+      central: { down: true, downSince: now - 10 * MIN },
+      newest: null,
+    },
+    now,
+    "Asia/Karachi",
+  );
+  assert.equal(
+    rough.text,
+    "Daily check: central is down, since 1:36 PM.\n" +
+      "3 of 1,440 checks in the last 24 h failed (no outage).\n" +
+      "Backups: none in R2.",
+  );
 });

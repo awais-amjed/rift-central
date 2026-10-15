@@ -11,7 +11,7 @@
 // silently, and only the email reaches a pocket.
 import { DurableObject } from "cloudflare:workers";
 import { EmailMessage } from "cloudflare:email";
-import { stepBackups, stepCentral, words } from "./watch.mjs";
+import { stepBackups, stepCentral, tally, words } from "./watch.mjs";
 
 /** What is checked, each the cheapest call that proves its service answers. */
 const CHECKS = [
@@ -29,13 +29,19 @@ const ANSWER_WITHIN_MS = 10_000;
 /** Once an hour, well after the backup at seven past has uploaded. */
 const BACKUP_CRON = "30 * * * *";
 
+/**
+ * Once a day, at 9 AM in Karachi: a post saying the monitor still runs, so a
+ * quiet channel means central is fine rather than that nothing is watching.
+ */
+const DAILY_CRON = "0 4 * * *";
+
 /** The hourly dumps (stack/backup.sh): folder names readable, file names not. */
 const DUMPS = "db/hourly/";
 
 export default {
   async scheduled(event, env) {
     const watch = env.WATCH.get(env.WATCH.idFromName("central"));
-    await watch.run(event.scheduledTime, event.cron === BACKUP_CRON);
+    await watch.run(event.scheduledTime, event.cron);
   },
 };
 
@@ -45,7 +51,7 @@ export default {
  * a minute-old count would double an alert or miss one.
  */
 export class Watch extends DurableObject {
-  async run(now, backupsOnly) {
+  async run(now, cron) {
     const env = this.env;
     const store = this.ctx.storage;
     const zone = env.TIME_ZONE;
@@ -58,7 +64,15 @@ export class Watch extends DurableObject {
       await store.put("started", true);
     }
 
-    if (backupsOnly) {
+    if (cron === DAILY_CRON) {
+      alerts.push({
+        kind: "daily",
+        tally: await store.get("tally"),
+        central: await store.get("central"),
+        newest: await newestDump(env),
+      });
+      await store.delete("tally");
+    } else if (cron === BACKUP_CRON) {
       const backups = stepBackups(
         await store.get("backups"),
         await newestDump(env),
@@ -70,13 +84,18 @@ export class Watch extends DurableObject {
       const failed = await checkCentral(env);
       const central = stepCentral(await store.get("central"), failed, now);
       await store.put("central", central.state);
+      await store.put("tally", tally(await store.get("tally"), failed, central.alert, now));
       if (central.alert) alerts.push(central.alert);
     }
 
     for (const alert of alerts) {
       const message = words(alert, now, zone);
       console.log(`[monitor] ${message.text}`);
-      await Promise.all([post(env, message), email(env, message)]);
+      // The daily post is for the channel; an inbox hears only of changes.
+      await Promise.all([
+        post(env, message),
+        alert.kind === "daily" ? null : email(env, message),
+      ]);
     }
   }
 }

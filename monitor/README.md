@@ -41,6 +41,11 @@ bucket cannot be read, and again when a fresh one turns up. That catches
 both failures above: a dump that never uploads, and a run that never
 starts. It does not see the storage sync that follows the dump.
 
+At 9 AM in Karachi it posts a short daily check to the channel only:
+whether central is up, how many of the day's checks failed, and when the
+newest backup landed. A quiet channel then means central is fine, not that
+the monitor stopped; a missing daily post means the monitor did.
+
 Each alert is said once, when the state changes. The state lives in one
 Durable Object, not KV: KV is eventually consistent, and a run elsewhere
 reading a minute-old count would double an alert or miss one.
