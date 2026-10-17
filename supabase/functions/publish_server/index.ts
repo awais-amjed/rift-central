@@ -66,7 +66,7 @@ Deno.serve(async (req) => {
       p_invite_code: body.invite_code,
       p_name: body.name,
       p_description: body.description ?? null,
-      p_icon_url: body.icon_url ?? null,
+      p_icon_path: body.icon_path ?? null,
       p_tags: body.tags ?? [],
       p_member_count: body.member_count ?? 0,
       p_is_listed: body.is_listed ?? true,
