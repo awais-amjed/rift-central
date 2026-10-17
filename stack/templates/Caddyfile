@@ -8,7 +8,10 @@
 {{DOMAIN}} {
 	encode zstd gzip
 
-	reverse_proxy kong:8000 {
+	# By container name, not the service name `kong`: Caddy may share a network
+	# with another stack's Kong (see the sites import below), and a service name
+	# found on two networks can answer with either.
+	reverse_proxy central-kong:8000 {
 		# The address Auth limits by (GOTRUE_RATE_LIMIT_HEADER). Set, not
 		# appended: a value a client sent is replaced, so it cannot choose
 		# whose limit it spends.
