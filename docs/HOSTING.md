@@ -105,7 +105,11 @@ the same name, when it outgrows that.
   Caddy and the lobby's Kong and LiveKit share a Docker network, `rift-edge`,
   named in each stack's own `docker-compose.override.yml`. Upstreams are
   container names (`central-kong`, `rift-kong`, `rift-livekit`), because both
-  stacks have a service called `kong`.
+  stacks have a service called `kong`. LiveKit is on `rift-edge` alone: it
+  answers every caller from one address on 7882, and on two networks it
+  answered from the wrong one, so no call connected (found the first evening).
+  Nothing in the lobby calls it on the inside; its functions use the public
+  address.
 - **Voice:** LiveKit publishes 7881/TCP and 7882/UDP itself.
 - **Kept small:** every lobby container has a memory and CPU cap in its
   override, so a flood there runs out of its own room rather than central's.
