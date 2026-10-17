@@ -125,7 +125,9 @@ the same name, when it outgrows that.
 Checked that day: a Let's Encrypt certificate for the name, the lobby's API and
 LiveKit answering through central's Caddy, central's API still answering
 through its own, LiveKit advertising the VPS's address with 7881 reachable from
-outside, and the lobby using about 500 MB. Not yet: a call.
+outside, and the lobby using about 500 MB. A call connected from the Linux app
+the same evening, after the LiveKit network fix above; listed in the directory
+the same evening too.
 
 ## Where central goes when it leaves
 
