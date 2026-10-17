@@ -7,7 +7,7 @@ The layout of this repository and how its schema is tested. Back to the [README]
 ```
 migrations/                 the schema, applied in filename order
 migrations/tests/           policy tests — what each role may actually reach
-supabase/functions/         edge functions: publish_server, push_send
+supabase/functions/         edge functions: publish_server, push_send, sweep_dm_attachments, delete_account
 relay/                      the push relay's hosts — Node, Cloudflare, or the function
 scripts/db_test.sh          runs the policy tests against a scratch database
 scripts/add_admin.sh        creates or removes a moderator account

@@ -6,11 +6,11 @@ copied unmodified from [supabase/supabase](https://github.com/supabase/supabase)
 licence text is `../volumes/db/LICENSE-APACHE-2.0`. It starts one worker per
 request for the function named in the path.
 
-Central's three functions are mounted beside it one by one in
+Central's functions are mounted beside it one by one in
 `../docker-compose.yml`, so the runtime serves those and nothing else.
 
 It runs with `VERIFY_JWT` off, as rift-self-host's does. On the managed project
 `publish_server` kept the platform's JWT check, but that check was never the one
 that mattered: the function reads the caller's token and asks Auth who it is
-(`getUser`) before doing anything. The other two are called by the database
-with a shared secret and no JWT at all.
+(`getUser`) before doing anything, and `delete_account` does the same. The other
+two are called by the database with a shared secret and no JWT at all.

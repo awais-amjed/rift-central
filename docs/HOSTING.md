@@ -247,7 +247,7 @@ hostname is the thing to do first and the capacity is only the thing that
 decides when.
 
 What self-hosting would have to replace: Postgres with `pg_cron` and `pg_net`,
-GoTrue, PostgREST, Realtime, Storage, and the three edge functions — which are
+GoTrue, PostgREST, Realtime, Storage, and the edge functions — which are
 ordinary Deno HTTP handlers and need no Supabase runtime; `relay/server.mjs`
 already runs one of them on plain Node. SES and the Firebase credentials are
 external either way and do not move.
@@ -256,6 +256,9 @@ external either way and do not move.
 
 ```bash
 supabase functions deploy publish_server --project-ref <ref>
+
+# delete_account reads the caller's token itself, as publish_server does.
+supabase functions deploy delete_account --project-ref <ref>
 
 # push_send is called by a database trigger, which carries no JWT.
 TMPDIR=$HOME/tmp supabase functions deploy push_send \
@@ -299,14 +302,14 @@ select jobname, schedule, active from cron.job;
 -- central-dm-attachment-sweep 47 3 * * *   t
 ```
 
-### 2. The three edge functions
+### 2. The four edge functions
 
-The commands are above. `publish_server` keeps JWT verification; the other two
-are called by the database, which carries no JWT, and will answer 401 to their
+The commands are above. `publish_server` and `delete_account` keep JWT
+verification; the other two are called by the database, which carries no JWT, and will answer 401 to their
 own callers if that flag is forgotten.
 
 ```bash
-supabase functions list --project-ref <ref>   # three, ACTIVE, verify_jwt as above
+supabase functions list --project-ref <ref>   # four, ACTIVE, verify_jwt as above
 ```
 
 ### 3. The four secrets
@@ -316,7 +319,7 @@ alongside them are put there by the platform; these four are not.
 
 | Secret | Read by | What it is |
 |---|---|---|
-| `RIFT_SECRET_KEY` | all three functions | The project's `sb_secret_…` key — what a function uses to reach the database as `service_role` |
+| `RIFT_SECRET_KEY` | every function | The project's `sb_secret_…` key — what a function uses to reach the database as `service_role` |
 | `PUSH_SECRET` | `push_send/relay.ts` | Proves a push request came from a database that was told it, not from the internet |
 | `FCM_SERVICE_ACCOUNT` | `push_send/relay.ts` | The Firebase service-account JSON, whole, as one value |
 | `ATTACHMENT_SWEEP_SECRET` | `sweep_dm_attachments/index.ts` | The same idea for the nightly sweep |
@@ -333,12 +336,12 @@ credential recoverable from a settings page, and it does not expire until
 
 Disabling the legacy keys is what takes that away, and the platform then
 stops injecting `SUPABASE_SERVICE_ROLE_KEY` into functions — which is why the
-functions have to be moved onto a key of their own *first*, or all three stop
+functions have to be moved onto a key of their own *first*, or all of them stop
 being able to reach the database. Order:
 
 1. `supabase secrets set RIFT_SECRET_KEY=sb_secret_…` (reveal it from the
    dashboard's API keys page, or `/v1/projects/<ref>/api-keys?reveal=true`)
-2. deploy all three functions — each reads `RIFT_SECRET_KEY` and falls back to
+2. deploy every function — each reads `RIFT_SECRET_KEY` and falls back to
    the legacy name, so this step is safe in either order with the one above
 3. `PUT /v1/projects/<ref>/api-keys/legacy?enabled=false` — note the query
    string; a JSON body is rejected with a message about a missing string

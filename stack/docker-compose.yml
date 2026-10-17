@@ -286,12 +286,13 @@ services:
       timeout: 5s
       retries: 3
     volumes:
-      # One mount per function, so the runtime serves these three and nothing
+      # One mount per function, so the runtime serves these four and nothing
       # else that might one day sit in that directory.
       - ./functions/main:/home/deno/functions/main:ro
       - ../supabase/functions/publish_server:/home/deno/functions/publish_server:ro
       - ../supabase/functions/push_send:/home/deno/functions/push_send:ro
       - ../supabase/functions/sweep_dm_attachments:/home/deno/functions/sweep_dm_attachments:ro
+      - ../supabase/functions/delete_account:/home/deno/functions/delete_account:ro
       - deno-cache:/root/.cache/deno
     # Only what the functions read. The router hands its whole environment to
     # every worker, so anything else put here — the database password, the

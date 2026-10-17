@@ -1,7 +1,7 @@
 # Central, self-hosted
 
 Everything central is, as containers: Postgres, Supabase Auth, PostgREST,
-Realtime, Storage, the edge runtime with central's three functions, Kong in
+Realtime, Storage, the edge runtime with central's functions, Kong in
 front of them, and Caddy for TLS. Upstream images, at the versions
 `rift-self-host` pins.
 
