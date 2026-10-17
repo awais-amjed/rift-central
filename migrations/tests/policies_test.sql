@@ -2715,6 +2715,130 @@ BEGIN
   RAISE NOTICE 'ok  a moderator lists Rift accounts, last active from their sessions';
 END $$;
 
+-- ============================================================
+-- A directory ban outlives the account (010)
+-- ============================================================
+-- mallory is banned with a server listed, deletes her account, and comes back
+-- under the same address in another case.
+
+RESET ROLE;
+SELECT set_config('request.jwt.claims', '', true);
+INSERT INTO auth.users (id, email) VALUES
+  ('eeee0000-0000-4000-8000-000000000001', 'Mallory@Example.com');
+INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+  ('eeee0000-0000-4000-8000-000000000001', 'mallory_test', 'chat-m', 'sign-m');
+INSERT INTO public_servers (owner_id, supabase_url, server_id, invite_code, name)
+VALUES ('eeee0000-0000-4000-8000-000000000001', 'https://mallory.example.com',
+        'eeee0000-0000-4000-8000-0000000000a1', 'code', 'Bad Place');
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
+SET LOCAL ROLE authenticated;
+SELECT moderation_set_banned('eeee0000-0000-4000-8000-000000000001', TRUE, 'Scam listings');
+
+RESET ROLE;
+DO $$
+BEGIN
+  DELETE FROM auth.users WHERE id = 'eeee0000-0000-4000-8000-000000000001';
+  IF EXISTS (SELECT 1 FROM users WHERE id = 'eeee0000-0000-4000-8000-000000000001') THEN
+    RAISE EXCEPTION 'FAIL: deleting a banned account was blocked';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM directory_ban_marks
+                  WHERE kind = 'email'
+                    AND email_sha256 = ban_mark_email_hash('mallory@example.com')
+                    AND reason = 'Scam listings')
+     OR NOT EXISTS (SELECT 1 FROM directory_ban_marks
+                     WHERE kind = 'server'
+                       AND supabase_url = 'https://mallory.example.com'
+                       AND server_id = 'eeee0000-0000-4000-8000-0000000000a1') THEN
+    RAISE EXCEPTION 'FAIL: deleting a banned account left no mark of the ban';
+  END IF;
+  IF EXISTS (SELECT 1 FROM directory_ban_marks WHERE email_sha256 LIKE '%@%') THEN
+    RAISE EXCEPTION 'FAIL: a mark holds an address';
+  END IF;
+  RAISE NOTICE 'ok  a banned account deleted leaves its address, hashed, and its servers';
+
+  -- An account that was never banned leaves nothing.
+  INSERT INTO auth.users (id, email) VALUES
+    ('eeee0000-0000-4000-8000-000000000003', 'innocent@example.com');
+  INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+    ('eeee0000-0000-4000-8000-000000000003', 'innocent_test', 'chat-i', 'sign-i');
+  DELETE FROM auth.users WHERE id = 'eeee0000-0000-4000-8000-000000000003';
+  IF EXISTS (SELECT 1 FROM directory_ban_marks
+              WHERE email_sha256 = ban_mark_email_hash('innocent@example.com')) THEN
+    RAISE EXCEPTION 'FAIL: an account nobody banned left a mark';
+  END IF;
+  RAISE NOTICE 'ok  an account nobody banned leaves nothing behind';
+
+  -- The same address again, in another case.
+  INSERT INTO auth.users (id, email) VALUES
+    ('eeee0000-0000-4000-8000-000000000002', ' mallory@example.COM');
+  INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+    ('eeee0000-0000-4000-8000-000000000002', 'mallory_again', 'chat-m2', 'sign-m2');
+  IF NOT EXISTS (SELECT 1 FROM directory_bans
+                  WHERE user_id = 'eeee0000-0000-4000-8000-000000000002'
+                    AND reason = 'Scam listings') THEN
+    RAISE EXCEPTION 'FAIL: the same address came back unbanned';
+  END IF;
+  IF EXISTS (SELECT 1 FROM directory_ban_marks WHERE kind = 'email'
+              AND email_sha256 = ban_mark_email_hash('mallory@example.com')) THEN
+    RAISE EXCEPTION 'FAIL: the address mark outlived the ban it gave back';
+  END IF;
+  RAISE NOTICE 'ok  a new account at the same address is banned again';
+
+  -- The server, whoever lists it.
+  BEGIN
+    INSERT INTO public_servers (owner_id, supabase_url, server_id, invite_code, name)
+    VALUES ('cccc0000-0000-4000-8000-000000000002', 'https://mallory.example.com',
+            'eeee0000-0000-4000-8000-0000000000a1', 'code', 'Bad Place');
+    RAISE EXCEPTION 'FAIL: a marked server was listed again';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'server_banned' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a marked server cannot be listed again, by anyone';
+END $$;
+
+-- Only a moderator sees the marks, and only a moderator lifts one.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+  BEGIN
+    PERFORM 1 FROM directory_ban_marks;
+    RAISE EXCEPTION 'FAIL: a member read the ban marks';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM moderation_ban_marks();
+    RAISE EXCEPTION 'FAIL: a member listed the ban marks';
+  EXCEPTION WHEN raise_exception OR insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  members cannot see the marks';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
+DO $$
+DECLARE v_marks JSONB := moderation_ban_marks();
+BEGIN
+  IF jsonb_array_length(v_marks) <> 1 OR v_marks -> 0 ->> 'kind' <> 'server'
+     OR v_marks -> 0 ->> 'banned_by' <> 'Erin' THEN
+    RAISE EXCEPTION 'FAIL: the moderator''s list of marks is wrong: %', v_marks;
+  END IF;
+  PERFORM moderation_lift_ban_mark((v_marks -> 0 ->> 'id')::UUID);
+  RAISE NOTICE 'ok  a moderator lists the marks and lifts one';
+END $$;
+
+RESET ROLE;
+DO $$
+BEGIN
+  INSERT INTO public_servers (owner_id, supabase_url, server_id, invite_code, name)
+  VALUES ('cccc0000-0000-4000-8000-000000000002', 'https://mallory.example.com',
+          'eeee0000-0000-4000-8000-0000000000a1', 'code', 'Good Place now');
+  RAISE NOTICE 'ok  a lifted server can be listed again';
+END $$;
+
 RESET ROLE;
 SET LOCAL ROLE authenticated;
 

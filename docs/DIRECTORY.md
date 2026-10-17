@@ -51,6 +51,14 @@ backups. So it has a report button and moderators.
 - **Ban** stops an account publishing and hides everything it has listed.
   Lifting a ban restores publishing but not the listings; each comes back by
   hand.
+- **A ban outlives the account.** A banned person can delete their account,
+  which cascades the ban and the hidden listings away, so deleting one leaves
+  marks (`directory_ban_marks`): a SHA-256 of the address, lowercased, and each
+  server it had listed. A new account at that address is banned again, with the
+  same reason, the moment it claims a handle. A marked server cannot be listed
+  by anyone (`server_banned`) until a moderator lifts the mark
+  (`moderation_ban_marks`, `moderation_lift_ban_mark`). A different address
+  still gets round it, as a second account always did.
 
 **A moderator is a separate account, not a Rift account.** It is an auth user
 with a password and no profile, listed in `central_admins`; a trigger stops a
