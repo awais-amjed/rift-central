@@ -35,7 +35,8 @@ Brought up on 29 September 2026:
 
 - **Access:** SSH by key only, no passwords, and no root login — an admin
   user with sudo. The firewall admits SSH (rate-limited), 80 and 443 (TCP,
-  and UDP for HTTP/3). Docker publishes nothing else: Kong is on 127.0.0.1.
+  and UDP for HTTP/3). Docker publishes nothing else of central's: Kong is
+  on 127.0.0.1. (Rift Lobby, below, publishes LiveKit's 7881 and 7882.)
   Security updates install themselves; a kernel update waits for a reboot.
 - **Updating:** the Forgejo server does not expose SSH to the internet, so the
   machine holds no credential for any repository. A workstation pushes to a
@@ -90,6 +91,37 @@ the new address in its CSP. Not yet: a real account and a real push through
 it. Accounts and backups on the managed project did not move, and a
 self-hosted server that turned push on against it has to turn it on again:
 its relay credential was enrolled there.
+
+## Rift Lobby on the same machine
+
+A public Rift server, `lobby.joinrift.app`, for trying Rift before running a
+server of your own (and for app store reviewers). It is a normal
+rift-self-host stack in `~/rift-lobby`, set up on 18 October 2026 with the
+console's own-proxy option, beside central rather than on a machine of its own
+because it is small and the VPS had room. It moves to its own machine, under
+the same name, when it outgrows that.
+
+- **In front:** central's Caddy, from `stack/volumes/caddy/sites/lobby.caddy`.
+  Caddy and the lobby's Kong and LiveKit share a Docker network, `rift-edge`,
+  named in each stack's own `docker-compose.override.yml`. Upstreams are
+  container names (`central-kong`, `rift-kong`, `rift-livekit`), because both
+  stacks have a service called `kong`.
+- **Voice:** LiveKit publishes 7881/TCP and 7882/UDP itself.
+- **Kept small:** every lobby container has a memory and CPU cap in its
+  override, so a flood there runs out of its own room rather than central's.
+  The override is written by hand, so the console leaves it alone, and the
+  file limit (2 MB) is set there rather than from the dashboard. The server's
+  own limits (200 members, 1 GB stored, messages kept a day and 500 per
+  channel, 8 per call, 3 Mbps shares, 5 new DMs an hour) are columns on its
+  `servers` row.
+- **Not backed up:** everything on it is gone within a day anyway.
+- **Console:** on 127.0.0.1:8080, through an SSH tunnel; its password is the
+  operator's.
+
+Checked that day: a Let's Encrypt certificate for the name, the lobby's API and
+LiveKit answering through central's Caddy, central's API still answering
+through its own, LiveKit advertising the VPS's address with 7881 reachable from
+outside, and the lobby using about 500 MB. Not yet: a call.
 
 ## Where central goes when it leaves
 
