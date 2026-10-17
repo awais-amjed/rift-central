@@ -29,3 +29,10 @@
 		max_size 20MB
 	}
 }
+
+# Other sites this machine serves, one file each, beside central rather than in
+# this file: setup.py rewrites this file, and a site added by hand here would be
+# lost on the next run. A folder with nothing in it imports nothing. A site in a
+# stack of its own reaches it over a Docker network both join, named in the
+# machine's own docker-compose.override.yml.
+import /etc/caddy/sites/*.caddy

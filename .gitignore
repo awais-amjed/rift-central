@@ -16,6 +16,8 @@ supabase/.temp/
 stack/.env
 stack/volumes/api/
 stack/volumes/caddy/
+# A machine's own additions to the stack, such as another site's network.
+stack/docker-compose.override.yml
 stack/volumes/.loaded
 
 # The monitor's local secrets, for `wrangler dev`.

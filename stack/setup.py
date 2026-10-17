@@ -237,6 +237,8 @@ def main() -> None:
     if values["DOMAIN"]:
         caddy = (HERE / "templates" / "Caddyfile").read_text()
         write_private(HERE / "volumes" / "caddy" / "Caddyfile", render(caddy, values, ("DOMAIN",)))
+        # Made here so Docker does not make it, as root, on first start.
+        (HERE / "volumes" / "caddy" / "sites").mkdir(exist_ok=True)
 
     if values["DOMAIN"] and not values["SMTP_HOST"]:
         print("Fill in SMTP_* in .env before anybody signs up: this stack confirms addresses.")

@@ -56,6 +56,15 @@ restarted if their config changed. Kong's config holds the API keys, so it is
 never written to disk: `templates/kong.yml` is mounted as it is, and Kong
 fills the keys in from its environment at every start (`kong_start.sh`).
 
+**Another site on the same machine** goes through this Caddy, since it holds
+80 and 443. Each one is a file in `volumes/caddy/sites/` (`<name>.caddy`, a
+normal Caddyfile site block), imported after central's own. A site in a stack
+of its own is reached over a Docker network both stacks join: create it once
+(`docker network create <name>`) and put Caddy on it in
+`docker-compose.override.yml`, which Compose reads beside this file and git
+ignores. `up.sh` does not watch the folder; after changing a site,
+`docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`.
+
 ## What `up.sh` does, and why each part
 
 - **Runs `setup.py`**, which keeps an existing `.env` and only adds what a newer
