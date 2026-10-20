@@ -304,6 +304,13 @@ services:
       FCM_SERVICE_ACCOUNT: ${FCM_SERVICE_ACCOUNT:-}
       ATTACHMENT_SWEEP_SECRET: ${ATTACHMENT_SWEEP_SECRET:-}
       VERIFY_JWT: "false"
+      # Each request runs in a worker on a thread of its own, and glibc gives
+      # threads their own memory pools, up to 8 per core. A finished worker's
+      # memory stays in its pool, so a server's runtime grew to 1 GB while
+      # quiet; two shared pools held it under 300 MB for the same work
+      # (measured Oct 20 2026). Until edge-runtime frees a finished worker
+      # itself (supabase/edge-runtime#722).
+      MALLOC_ARENA_MAX: "2"
     command: ["start", "--main-service", "/home/deno/functions/main"]
 
   # The email templates, for Auth to fetch. Internal only: nothing publishes a
