@@ -56,6 +56,15 @@ restarted if their config changed. Kong's config holds the API keys, so it is
 never written to disk: `templates/kong.yml` is mounted as it is, and Kong
 fills the keys in from its environment at every start (`kong_start.sh`).
 
+**Kong refuses Realtime's admin API** (`/realtime/v1/api/tenants`) and its
+description (`/api/openapi`) itself. That API accepts any token signed with
+`JWT_SECRET`, and Storage signs every file link with the same secret, so a
+member could otherwise suspend, delete or rewire Realtime. Only `/api/ping` (the
+monitor) and `/api/broadcast` (apps and bots) are used through Kong; `up.sh`
+reads the tenant from the database, and the health check asks Realtime directly. Verified Nov 5 2026 on a
+local stack: every spelling of the path (`//tenants`, `%74enants`,
+`x/../tenants`) gets 403.
+
 **Another site on the same machine** goes through this Caddy, since it holds
 80 and 443. Each one is a file in `volumes/caddy/sites/` (`<name>.caddy`, a
 normal Caddyfile site block), imported after central's own. A site in a stack

@@ -148,6 +148,45 @@ services:
             - admin
             - anon
 
+  ## Realtime's admin API, and the description of it, answered by Kong and
+  ## never passed on. /api/tenants trusts any token signed with JWT_SECRET,
+  ## and Storage signs every file link with that same secret, so a member
+  ## holding one could suspend, delete or rewire Realtime from here. Upstream
+  ## Supabase blocks both paths the same way. Kong matches the path after
+  ## merging slashes, decoding and resolving dot segments, so "//tenants" or
+  ## "x/../tenants" land here too. post-function, not request-termination,
+  ## to match rift-self-host, whose servers may run an older compose file
+  ## that does not load it.
+  - name: realtime-v1-rest-tenants
+    _comment: "Realtime: /realtime/v1/api/tenants/* (refused)"
+    url: http://localhost:1
+    routes:
+      - name: realtime-v1-rest-tenants
+        strip_path: true
+        paths:
+          - /realtime/v1/api/tenants
+        plugins:
+          - name: post-function
+            config:
+              access:
+                - |
+                    return kong.response.exit(403, { message = "Access is forbidden." })
+
+  - name: realtime-v1-rest-openapi
+    _comment: "Realtime: /realtime/v1/api/openapi/* (refused)"
+    url: http://localhost:1
+    routes:
+      - name: realtime-v1-rest-openapi
+        strip_path: true
+        paths:
+          - /realtime/v1/api/openapi
+        plugins:
+          - name: post-function
+            config:
+              access:
+                - |
+                    return kong.response.exit(403, { message = "Access is forbidden." })
+
   - name: realtime-v1-rest
     _comment: "Realtime: /realtime/v1/api/* -> http://realtime:4000/api/*"
     url: http://realtime-dev.central-realtime:4000/api
