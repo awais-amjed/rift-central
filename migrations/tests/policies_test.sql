@@ -2839,6 +2839,83 @@ BEGIN
   RAISE NOTICE 'ok  a lifted server can be listed again';
 END $$;
 
+-- ============================================================
+-- Reports post to their webhooks (011)
+-- ============================================================
+RESET ROLE;
+DO $$
+DECLARE
+  v_bob     UUID := 'cccc0000-0000-4000-8000-000000000002';
+  v_before  BIGINT;
+  v_body    TEXT;
+  v_id      UUID;
+BEGIN
+  -- With no row a report posts nothing.
+  SELECT count(*) INTO v_before FROM net.http_request_queue;
+  INSERT INTO bug_reports (reporter_id, description, version, system)
+  VALUES (v_bob, 'no webhook set', '1.0.0', 'linux');
+  IF (SELECT count(*) FROM net.http_request_queue) <> v_before THEN
+    RAISE EXCEPTION 'FAIL: a report posted with no webhook configured';
+  END IF;
+
+  INSERT INTO report_webhook_config (kind, url, admin_url) VALUES
+    ('bug', 'https://example.com/functions/v1/webhook/bugsecret', 'https://admin.example.com'),
+    ('directory', 'https://example.com/functions/v1/webhook/dirsecret', NULL);
+
+  INSERT INTO bug_reports (reporter_id, description, version, system)
+  VALUES (v_bob, 'The share stopped', '2.0.0-beta.1', 'windows 11');
+  SELECT convert_from(body, 'UTF8') INTO v_body FROM net.http_request_queue
+   WHERE url LIKE '%/bugsecret' ORDER BY id DESC LIMIT 1;
+  IF v_body IS NULL OR v_body NOT LIKE '%The share stopped%'
+     OR v_body NOT LIKE '%2.0.0-beta.1%' OR v_body NOT LIKE '%https://admin.example.com%'
+     OR v_body LIKE '%' || v_bob::text || '%' THEN
+    RAISE EXCEPTION 'FAIL: a bug report''s message is wrong: %', v_body;
+  END IF;
+
+  -- A directory report goes to its own webhook, under the listing's name.
+  SELECT count(*) INTO v_before FROM net.http_request_queue;
+  INSERT INTO directory_reports (reporter_id, bot_listing_id, reason, details, snapshot)
+  VALUES (v_bob, (SELECT id FROM public_bots LIMIT 1), 'scam', 'took my money', '{"name":"Shady"}');
+  SELECT convert_from(body, 'UTF8') INTO v_body FROM net.http_request_queue
+   WHERE url LIKE '%/dirsecret' ORDER BY id DESC LIMIT 1;
+  IF (SELECT count(*) FROM net.http_request_queue) <> v_before + 1
+     OR v_body NOT LIKE '%bot %Shady%, reason: scam%' OR v_body NOT LIKE '%took my money%'
+     OR v_body LIKE '%Open in admin%' THEN
+    RAISE EXCEPTION 'FAIL: a directory report''s message is wrong: %', v_body;
+  END IF;
+
+  -- Changing an open report updates its row and posts nothing more.
+  UPDATE directory_reports SET reason = 'spam' WHERE reporter_id = v_bob AND details = 'took my money';
+  IF (SELECT count(*) FROM net.http_request_queue) <> v_before + 1 THEN
+    RAISE EXCEPTION 'FAIL: changing an open report posted again';
+  END IF;
+
+  -- A webhook that cannot be queued costs a message, never the report.
+  UPDATE report_webhook_config SET url = '' WHERE kind = 'bug';
+  INSERT INTO bug_reports (reporter_id, description, version, system)
+  VALUES (v_bob, 'still saved', '1.0.0', 'linux') RETURNING id INTO v_id;
+  IF NOT EXISTS (SELECT 1 FROM bug_reports WHERE id = v_id) THEN
+    RAISE EXCEPTION 'FAIL: a bad webhook lost the report';
+  END IF;
+  RAISE NOTICE 'ok  reports post to their own webhooks, without the reporter';
+END $$;
+
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+  BEGIN
+    PERFORM 1 FROM report_webhook_config;
+    RAISE EXCEPTION 'FAIL: a member read the report webhooks';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM post_report_to_webhook('bug', 'forged');
+    RAISE EXCEPTION 'FAIL: a member posted to the report webhook';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  the report webhooks are out of members'' reach';
+END $$;
+
 RESET ROLE;
 SET LOCAL ROLE authenticated;
 

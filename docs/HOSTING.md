@@ -442,6 +442,34 @@ A non-200, or no row at all, means the endpoint or the secret is wrong. Push has
 no such probe — it needs a real device — so check it with two accounts before
 believing it.
 
+### Reports in a channel (optional)
+
+`report_webhook_config` holds one row per kind of report, `bug` and `directory`,
+and `announce_bug_report` and `announce_directory_report` post each new report to
+that row's webhook. No row means nothing is posted, which looks exactly like a
+quiet day. `up.sh` does not write these rows, so they stay as set.
+
+Point them at a Rift channel webhook (Manage server → Webhooks), or a Discord one.
+**Keep the channels private to the moderators.** A webhook's messages are not
+encrypted, a bug report's words are personal data, and the copy there outlives the
+90 days central keeps a report. The reporter and the log files are never sent.
+
+Pipe the statement in, so the URL is not on a command line:
+
+```sql
+INSERT INTO report_webhook_config (kind, url, admin_url) VALUES
+  ('bug', '<webhook URL>', 'https://admin.joinrift.app'),
+  ('directory', '<webhook URL>', 'https://admin.joinrift.app')
+ON CONFLICT (kind) DO UPDATE SET url = EXCLUDED.url, admin_url = EXCLUDED.admin_url;
+```
+
+Posting is best effort: nothing retries a message the channel's server missed, so
+the admin site stays the whole record.
+
+Verified Nov 7 2026 on the local stacks: a bug report and a directory report each
+arrived in their own Rift channel, badged as webhook messages, from a request
+`pg_net` sent; a webhook that could not be queued still saved the report.
+
 ### 5. Auth settings
 
 None of this is in a migration; it is the project's auth config, set in the
