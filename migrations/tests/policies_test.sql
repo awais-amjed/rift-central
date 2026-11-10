@@ -374,6 +374,52 @@ BEGIN
   RAISE NOTICE 'ok  unread counts follow the cursor, which only moves forward';
 END $$;
 
+-- 012: a cursor that moves is told to its owner's own topic, once; one that
+-- does not move says nothing, or every reopen would ring every device.
+RESET ROLE;
+DO $$
+DECLARE
+  v_alice UUID := 'cccc0000-0000-4000-8000-000000000001';
+  v_bob   UUID := 'cccc0000-0000-4000-8000-000000000002';
+  v_n     INTEGER;
+BEGIN
+  IF realtime_ready() THEN
+    RAISE NOTICE 'skip  Realtime runs here, so the recorder would replace it';
+    RETURN;
+  END IF;
+  CREATE SCHEMA IF NOT EXISTS realtime;
+  CREATE TEMP TABLE said (payload JSONB, event TEXT, topic TEXT);
+  CREATE FUNCTION realtime.send(JSONB, TEXT, TEXT, BOOLEAN) RETURNS VOID
+    LANGUAGE sql AS 'INSERT INTO pg_temp.said VALUES ($1, $2, $3)';
+
+  UPDATE read_state SET last_read_id = 0
+   WHERE user_id = v_alice AND scope = 'dm' AND scope_id = v_bob;
+  IF EXISTS (SELECT 1 FROM pg_temp.said WHERE event = 'read') THEN
+    RAISE EXCEPTION 'FAIL: a cursor moved backwards was announced as a read';
+  END IF;
+
+  PERFORM mark_read('dm', v_bob);
+  SELECT count(*) INTO v_n FROM pg_temp.said WHERE event = 'read';
+  IF v_n <> 1 OR NOT EXISTS (
+       SELECT 1 FROM pg_temp.said
+        WHERE event = 'read' AND topic = 'user:' || v_alice
+          AND payload ->> 'scope' = 'dm'
+          AND payload ->> 'scope_id' = v_bob::TEXT
+          AND (payload ->> 'last_read_id')::BIGINT > 0) THEN
+    RAISE EXCEPTION 'FAIL: a read was told % times, not once to its reader with the cursor', v_n;
+  END IF;
+
+  PERFORM mark_read('dm', v_bob);
+  SELECT count(*) INTO v_n FROM pg_temp.said WHERE event = 'read';
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'FAIL: reading what was already read was announced again';
+  END IF;
+
+  DROP FUNCTION realtime.send(JSONB, TEXT, TEXT, BOOLEAN);
+  DROP TABLE pg_temp.said;
+  RAISE NOTICE 'ok  a read is told to the reader''s devices once; a non-read is not';
+END $$;
+
 -- The cap (023). A badge draws "99+" above ninety-nine, so counting past
 -- that is work nobody can see — and it is the kind of work that grows with
 -- the backlog rather than with the screen. Without the cap this counted
