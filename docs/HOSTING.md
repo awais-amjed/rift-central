@@ -298,6 +298,9 @@ supabase functions deploy publish_server --project-ref <ref>
 # delete_account reads the caller's token itself, as publish_server does.
 supabase functions deploy delete_account --project-ref <ref>
 
+# server_pass reads the caller's token itself too.
+supabase functions deploy server_pass --project-ref <ref>
+
 # push_send is called by a database trigger, which carries no JWT.
 TMPDIR=$HOME/tmp supabase functions deploy push_send \
   --project-ref <ref> --no-verify-jwt
@@ -340,20 +343,20 @@ select jobname, schedule, active from cron.job;
 -- central-dm-attachment-sweep 47 3 * * *   t
 ```
 
-### 2. The four edge functions
+### 2. The edge functions
 
-The commands are above. `publish_server` and `delete_account` keep JWT
-verification; the other two are called by the database, which carries no JWT, and will answer 401 to their
+The commands are above. `publish_server`, `delete_account` and `server_pass` keep JWT
+verification; `push_send` and `sweep_dm_attachments` are called by the database, which carries no JWT, and will answer 401 to their
 own callers if that flag is forgotten.
 
 ```bash
-supabase functions list --project-ref <ref>   # four, ACTIVE, verify_jwt as above
+supabase functions list --project-ref <ref>   # each one above, ACTIVE, verify_jwt as above
 ```
 
-### 3. The four secrets
+### 3. The secrets
 
 `supabase secrets set NAME=value --project-ref <ref>`. The `SUPABASE_*` entries
-alongside them are put there by the platform; these four are not.
+alongside them are put there by the platform; these are not.
 
 | Secret | Read by | What it is |
 |---|---|---|
@@ -361,6 +364,8 @@ alongside them are put there by the platform; these four are not.
 | `PUSH_SECRET` | `push_send/relay.ts` | Proves a push request came from a database that was told it, not from the internet |
 | `FCM_SERVICE_ACCOUNT` | `push_send/relay.ts` | The Firebase service-account JSON, whole, as one value |
 | `ATTACHMENT_SWEEP_SECRET` | `sweep_dm_attachments/index.ts` | The same idea for the nightly sweep |
+| `SERVER_PASS_SIGNING_KEY` | `server_pass/index.ts` | Ed25519 private key (PKCS8, base64) that signs the passes self-hosted servers check when a link needs a Rift account. Its public half is built into rift-self-host (`_shared/server_pass.ts`), so changing it needs a console release |
+| `SERVER_PASS_TAG_SECRET` | `server_pass/pass.ts` | 32 random bytes, base64: what makes an account's tag on a server. Changing it changes every tag, which lifts every ban servers made by tag |
 
 **`RIFT_SECRET_KEY` rather than the platform's `SUPABASE_SERVICE_ROLE_KEY`,
 and this is the one item here that is a decision rather than a step.** A

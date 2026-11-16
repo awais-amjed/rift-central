@@ -293,6 +293,7 @@ services:
       - ../supabase/functions/push_send:/home/deno/functions/push_send:ro
       - ../supabase/functions/sweep_dm_attachments:/home/deno/functions/sweep_dm_attachments:ro
       - ../supabase/functions/delete_account:/home/deno/functions/delete_account:ro
+      - ../supabase/functions/server_pass:/home/deno/functions/server_pass:ro
       - deno-cache:/root/.cache/deno
     # Only what the functions read. The router hands its whole environment to
     # every worker, so anything else put here — the database password, the
@@ -303,6 +304,8 @@ services:
       PUSH_SECRET: ${PUSH_SECRET:-}
       FCM_SERVICE_ACCOUNT: ${FCM_SERVICE_ACCOUNT:-}
       ATTACHMENT_SWEEP_SECRET: ${ATTACHMENT_SWEEP_SECRET:-}
+      SERVER_PASS_SIGNING_KEY: ${SERVER_PASS_SIGNING_KEY:-}
+      SERVER_PASS_TAG_SECRET: ${SERVER_PASS_TAG_SECRET:-}
       VERIFY_JWT: "false"
       # Each request runs in a worker on a thread of its own, and glibc gives
       # threads their own memory pools, up to 8 per core. A finished worker's
