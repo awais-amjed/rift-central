@@ -65,6 +65,15 @@ reads the tenant from the database, and the health check asks Realtime directly.
 local stack: every spelling of the path (`//tenants`, `%74enants`,
 `x/../tenants`) gets 403.
 
+**Kong refuses signed links into `backups` and `central-dm-attachments`**,
+minting one or opening one. A signed link needs no session, so a member could
+turn any file they may read into a public download from the API's domain, for
+as long as they asked. Nothing of Rift's uses one there: the app downloads
+with its session, and the admin dashboard signs only directory icons and bug
+reports, which stay open to it. Each bucket also takes only the file type Rift
+uploads to it (`allowed_mime_types`). Verified Nov 18 2026 on a local stack:
+both sign routes 403, an SVG refused by every bucket, an icon still signed.
+
 **Another site on the same machine** goes through this Caddy, since it holds
 80 and 443. Each one is a file in `volumes/caddy/sites/` (`<name>.caddy`, a
 normal Caddyfile site block), imported after central's own. A site in a stack

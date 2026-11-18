@@ -1,5 +1,6 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
+import { isPlainAddress } from "./address.ts";
 import { safePost } from "./safe_fetch.ts";
 
 // `RIFT_SECRET_KEY` first, the legacy JWT after it. The platform stops
@@ -54,6 +55,9 @@ Deno.serve(async (req) => {
     if (!supabaseUrl || !serverId || !token) {
       return fail("missing_fields", 400);
     }
+    // One listing per server however its address is spelled, which the
+    // directory can only promise for a host spelled plainly (address.ts).
+    if (!isPlainAddress(supabaseUrl)) return fail("server_url_not_allowed", 400);
 
     // Ask the server itself. A refusal here is the whole gate.
     const verified = await verifyWithServer(supabaseUrl, serverId, token);

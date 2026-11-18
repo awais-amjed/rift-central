@@ -216,6 +216,29 @@ services:
             - admin
             - anon
 
+  ## No signed links into the two buckets of sealed bytes, made or used. A
+  ## signed link needs no session to open, so one minted for a file in either
+  ## was that file published from this domain for as long as the link said,
+  ## ten years if asked. Nothing of Rift's makes one: the app downloads DM
+  ## files and backups with its session, and the admin dashboard signs only
+  ## directory icons and bug reports. The prefix covers both minting
+  ## (POST /object/sign/<bucket>[/<path>]) and opening (GET with ?token=).
+  - name: storage-v1-sign-sealed
+    _comment: "Storage: signed links into backups and DM attachments (refused)"
+    url: http://localhost:1
+    routes:
+      - name: storage-v1-sign-sealed
+        strip_path: true
+        paths:
+          - /storage/v1/object/sign/backups
+          - /storage/v1/object/sign/central-dm-attachments
+        plugins:
+          - name: post-function
+            config:
+              access:
+                - |
+                    return kong.response.exit(403, { message = "Access is forbidden." })
+
   ## DM attachments, vault backups and directory icons. No key-auth: a presigned URL carries its signature in the
   ## query string and no apikey header at all, and the post-function below drops
   ## the empty Authorization the transformer would otherwise leave behind.

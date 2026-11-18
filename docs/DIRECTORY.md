@@ -8,7 +8,11 @@ They look alike and are governed differently, which is the thing to know
 before changing either.
 
 A **server** listing reserves `(supabase_url, server_id)` — a pair that
-exists whether or not its owner has claimed it. So the first account to
+exists whether or not its owner has claimed it. The address is compared by
+`server_url_key` (scheme and host, lower-cased, without a default port, a
+trailing dot or a path), since every spelling of one host passes the listing
+proof; compared as typed, `https://a.example.com/` was a fresh listing that a
+moderator's hide or a deleted ban's mark had never seen (fixed Nov 18 2026). So the first account to
 publish one holds the only slot, and a member of any server holds everything
 needed to publish it. `publish_server` is therefore service-role only, behind
 an edge function that redeems a one-time token against the server's own

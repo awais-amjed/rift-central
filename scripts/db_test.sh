@@ -107,7 +107,8 @@ GRANT USAGE ON SCHEMA public, auth, extensions TO anon, authenticated, service_r
 -- members every privilege on objects and leaves the rest to RLS, so this does.
 CREATE SCHEMA IF NOT EXISTS storage;
 CREATE TABLE IF NOT EXISTS storage.buckets (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, public BOOLEAN, file_size_limit BIGINT
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, public BOOLEAN, file_size_limit BIGINT,
+  allowed_mime_types TEXT[]
 );
 CREATE TABLE IF NOT EXISTS storage.objects (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -207,6 +208,19 @@ BEGIN
     RAISE EXCEPTION 'FAIL: anon can reach %', v_leaked;
   END IF;
   RAISE NOTICE 'ok  anon can read and write no table';
+
+  -- Supabase's defaults give both roles every sequence too, and USAGE is
+  -- nextval(). Nothing a member writes takes its id from one.
+  SELECT string_agg(r.rolname || ' ' || c.relname, ', ' ORDER BY c.relname)
+    INTO v_leaked
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    CROSS JOIN (VALUES ('anon'), ('authenticated')) r(rolname)
+   WHERE c.relkind = 'S' AND n.nspname = 'public'
+     AND has_sequence_privilege(r.rolname, c.oid, 'USAGE, SELECT, UPDATE');
+  IF v_leaked IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: % can use a sequence: %', 'a session', v_leaked;
+  END IF;
+  RAISE NOTICE 'ok  no session holds a sequence';
 
   -- The heads table is the DM list's index. `dm_conversations` reads it as
   -- definer; a member reading it directly would be reading a list of who

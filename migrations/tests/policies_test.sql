@@ -2965,4 +2965,155 @@ END $$;
 RESET ROLE;
 SET LOCAL ROLE authenticated;
 
+-- ============================================================
+-- Who may read a DM file; bucket types; listing keys (013)
+-- ============================================================
+-- Three fresh accounts so nothing above (a ban, a block) colours the answer:
+-- fay has sent gus a DM, and hal has never heard of either of them.
+
+RESET ROLE;
+INSERT INTO auth.users (id) VALUES
+  ('cccc0000-0000-4000-8000-0000000000f1'),  -- fay
+  ('cccc0000-0000-4000-8000-0000000000f2'),  -- gus
+  ('cccc0000-0000-4000-8000-0000000000f3');  -- hal
+INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+  ('cccc0000-0000-4000-8000-0000000000f1', 'fay_test', 'chat-fay', 'sign-fay'),
+  ('cccc0000-0000-4000-8000-0000000000f2', 'gus_test', 'chat-gus', 'sign-gus'),
+  ('cccc0000-0000-4000-8000-0000000000f3', 'hal_test', 'chat-hal', 'sign-hal');
+-- A message's sender is the session's, whatever the row says.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000f1","role":"authenticated"}', true); END $$;
+INSERT INTO dm_messages (sender_id, recipient_id, ciphertext, nonce, signature, key_version)
+VALUES ('cccc0000-0000-4000-8000-0000000000f1',
+        'cccc0000-0000-4000-8000-0000000000f2', 'from-fay', 'n', 's', 1);
+INSERT INTO storage.objects (bucket_id, name, owner) VALUES
+  ('central-dm-attachments', 'cccc0000-0000-4000-8000-0000000000f1/to-gus.bin',
+   'cccc0000-0000-4000-8000-0000000000f1'),
+  ('central-dm-attachments', 'cccc0000-0000-4000-8000-0000000000f2/gus-own.bin',
+   'cccc0000-0000-4000-8000-0000000000f2'),
+  -- Not in a folder, and in one that is not a uuid: nobody's.
+  ('central-dm-attachments', 'loose.bin', NULL),
+  ('central-dm-attachments', 'not-a-uid/x.bin', NULL);
+
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE
+  v_fay TEXT := 'cccc0000-0000-4000-8000-0000000000f1';
+  v_gus TEXT := 'cccc0000-0000-4000-8000-0000000000f2';
+  v_hal TEXT := 'cccc0000-0000-4000-8000-0000000000f3';
+BEGIN
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_fay || '","role":"authenticated"}', true);
+  IF NOT EXISTS (SELECT 1 FROM storage.objects WHERE name = v_fay || '/to-gus.bin') THEN
+    RAISE EXCEPTION 'FAIL: an account cannot read its own DM file';
+  END IF;
+  -- Gus never wrote to fay, so his folder is closed to her.
+  IF EXISTS (SELECT 1 FROM storage.objects WHERE name = v_gus || '/gus-own.bin') THEN
+    RAISE EXCEPTION 'FAIL: an account read the files of somebody who never wrote to it';
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_gus || '","role":"authenticated"}', true);
+  IF NOT EXISTS (SELECT 1 FROM storage.objects WHERE name = v_fay || '/to-gus.bin') THEN
+    RAISE EXCEPTION 'FAIL: a recipient cannot download the file a DM sent them';
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_hal || '","role":"authenticated"}', true);
+  IF EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'central-dm-attachments') THEN
+    RAISE EXCEPTION 'FAIL: a stranger can list DM files: %',
+      (SELECT string_agg(name, ', ') FROM storage.objects
+        WHERE bucket_id = 'central-dm-attachments');
+  END IF;
+  RAISE NOTICE 'ok  a DM file is read by its uploader and the people they wrote to, nobody else';
+END $$;
+
+RESET ROLE;
+DO $$
+BEGIN
+  IF (SELECT allowed_mime_types FROM storage.buckets WHERE id = 'backups')
+       IS DISTINCT FROM ARRAY['application/json']
+     OR (SELECT allowed_mime_types FROM storage.buckets WHERE id = 'central-dm-attachments')
+       IS DISTINCT FROM ARRAY['application/octet-stream']
+     OR (SELECT allowed_mime_types FROM storage.buckets WHERE id = 'directory-icons')
+       IS DISTINCT FROM ARRAY['image/png']
+     OR (SELECT allowed_mime_types FROM storage.buckets WHERE id = 'bug-reports')
+       IS DISTINCT FROM ARRAY['application/gzip', 'text/plain'] THEN
+    RAISE EXCEPTION 'FAIL: a bucket takes file types Rift never uploads to it';
+  END IF;
+  IF EXISTS (SELECT 1 FROM storage.buckets WHERE allowed_mime_types IS NULL) THEN
+    RAISE EXCEPTION 'FAIL: a bucket takes any file type: %',
+      (SELECT string_agg(id, ', ') FROM storage.buckets WHERE allowed_mime_types IS NULL);
+  END IF;
+  RAISE NOTICE 'ok  each bucket takes only the type Rift uploads to it';
+END $$;
+
+DO $$
+DECLARE
+  v_fay  UUID := 'cccc0000-0000-4000-8000-0000000000f1';
+  v_gus  UUID := 'cccc0000-0000-4000-8000-0000000000f2';
+  v_srv  UUID := 'eeee0000-0000-4000-8000-0000000000f1';
+  v_row  public_servers;
+BEGIN
+  IF server_url_key('https://Key.Example.com/') <> 'https://key.example.com'
+     OR server_url_key('https://key.example.com:443') <> 'https://key.example.com'
+     OR server_url_key('https://key.example.com./rest/v1?x#y') <> 'https://key.example.com'
+     OR server_url_key('https://key.example.com:8443/') <> 'https://key.example.com:8443' THEN
+    RAISE EXCEPTION 'FAIL: server_url_key spells one server two ways';
+  END IF;
+
+  v_row := publish_server_as(v_fay, 'https://Key.Example.com/', v_srv,
+                             'code', 'Keyed Place');
+  UPDATE public_servers SET hidden_at = now(), hidden_reason = 'Spam' WHERE id = v_row.id;
+
+  -- The same server, spelled anew by its owner: the same row, still hidden,
+  -- and now spelled the way the owner's client will look it up.
+  v_row := publish_server_as(v_fay, 'https://key.example.com:443', v_srv,
+                             'code', 'Keyed Place again');
+  IF (SELECT count(*) FROM public_servers WHERE server_id = v_srv) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: a new spelling of the address made a second listing';
+  END IF;
+  IF v_row.hidden_at IS NULL THEN
+    RAISE EXCEPTION 'FAIL: a new spelling of the address undid a moderator''s hide';
+  END IF;
+  IF v_row.supabase_url <> 'https://key.example.com:443' OR v_row.name <> 'Keyed Place again' THEN
+    RAISE EXCEPTION 'FAIL: republishing under a new spelling did not update the listing';
+  END IF;
+
+  -- Somebody else, by yet another spelling: still the first owner's.
+  BEGIN
+    PERFORM publish_server_as(v_gus, 'https://KEY.example.com.', v_srv, 'code', 'Mine now');
+    RAISE EXCEPTION 'FAIL: a new spelling took over another account''s listing';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'listing_owned_by_another_account' THEN RAISE; END IF;
+  END;
+
+  -- A deleted ban's mark holds for every spelling too.
+  INSERT INTO directory_ban_marks (kind, supabase_url, server_id, reason)
+  VALUES ('server', 'https://marked.example.com', 'eeee0000-0000-4000-8000-0000000000f2', 'Scam');
+  BEGIN
+    PERFORM publish_server_as(v_gus, 'https://Marked.example.com/',
+                              'eeee0000-0000-4000-8000-0000000000f2', 'code', 'Back again');
+    RAISE EXCEPTION 'FAIL: a marked server came back under a new spelling';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'server_banned' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  one listing per server however its address is spelled, hides and marks included';
+END $$;
+
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-0000000000f3","role":"authenticated"}', true);
+  BEGIN
+    PERFORM nextval('dm_messages_id_seq');
+    RAISE EXCEPTION 'FAIL: a member drew from a sequence';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM server_url_key('https://x.example.com');
+    RAISE EXCEPTION 'FAIL: a member called server_url_key';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  members hold no sequence';
+END $$;
+
 ROLLBACK;
