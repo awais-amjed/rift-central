@@ -13,6 +13,7 @@ import { createServer } from "node:http";
 import { Buffer } from "node:buffer";
 import {
   createRelay,
+  MAX_BODY_BYTES,
   relayConfigFromEnv,
 } from "../supabase/functions/push_send/relay.ts";
 
@@ -20,8 +21,19 @@ const handle = createRelay(relayConfigFromEnv());
 const port = Number(process.env.PORT ?? 8080);
 
 createServer(async (req, res) => {
+  // Read only as far as the relay would ever look: a body past its limit is
+  // answered at once rather than held in memory first.
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) {
+      res.writeHead(413).end("too large");
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  }
 
   // Node's header bag can hold arrays; `Headers` cannot. Nothing the relay
   // reads is ever repeated, so the first value is the right one.

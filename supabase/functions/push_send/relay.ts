@@ -39,6 +39,13 @@ export interface RelayConfig {
 /** How many devices one request may ring. A community server, not a fleet. */
 const MAX_TOKENS = 1000;
 
+/**
+ * The most a request may carry. A full one is MAX_TOKENS tokens of a couple of
+ * hundred characters, about 200 KB; anything past this is not a ring. Read
+ * against as it arrives, so a host never holds more of a body than this.
+ */
+export const MAX_BODY_BYTES = 512 * 1024;
+
 function b64url(bytes: Uint8Array | string): string {
   const raw = typeof bytes === "string" ? bytes : String.fromCharCode(...bytes);
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -187,7 +194,9 @@ export function createRelay(config: RelayConfig) {
     }
     try {
       const secret = req.headers.get("x-push-secret") ?? "";
-      const { recipient, relay_id: relayId, tokens: given } = await req.json();
+      const raw = await readCapped(req, MAX_BODY_BYTES);
+      if (raw === null) return new Response("too large", { status: 413 });
+      const { recipient, relay_id: relayId, tokens: given } = JSON.parse(raw);
 
       let tokens: string[] = Array.isArray(given)
         ? given.filter((t: unknown) => typeof t === "string")
@@ -229,6 +238,32 @@ export function createRelay(config: RelayConfig) {
       return new Response(`error: ${err}`, { status: 500 });
     }
   };
+}
+
+/** [req]'s body as text, or null once it passes [limit] bytes. */
+async function readCapped(req: Request, limit: number): Promise<string | null> {
+  if (Number(req.headers.get("content-length") ?? 0) > limit) return null;
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > limit) {
+      reader.cancel().catch(() => {});
+      return null;
+    }
+    parts.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const part of parts) {
+    all.set(part, at);
+    at += part.length;
+  }
+  return new TextDecoder().decode(all);
 }
 
 /**
