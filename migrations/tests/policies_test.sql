@@ -3389,4 +3389,54 @@ BEGIN
   RAISE NOTICE 'ok  icons are the publisher''s own, and a hide outlives the account';
 END $$;
 
+-- ════════════════════════════════════════════════════════════
+-- A moderator switches a push relay off (017)
+-- ════════════════════════════════════════════════════════════
+CREATE TEMP TABLE relay_017 (id UUID, secret TEXT);
+GRANT ALL ON relay_017 TO authenticated;
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE v_out JSONB;
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-0000000000f1","role":"authenticated"}', true);
+  v_out := enroll_push_relay('https://relay.example.com', 'eeee0000-0000-4000-8000-0000000000d1');
+  INSERT INTO relay_017 VALUES ((v_out ->> 'relay_id')::uuid, v_out ->> 'secret');
+  BEGIN
+    PERFORM moderation_push_relays();
+    RAISE EXCEPTION 'FAIL: a member listed the push relays';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM moderation_set_relay_disabled((SELECT id FROM relay_017), true);
+    RAISE EXCEPTION 'FAIL: a member switched a relay off';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true);
+  IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(moderation_push_relays()) r
+                  WHERE (r ->> 'id')::uuid = (SELECT id FROM relay_017)
+                    AND r ->> 'owner_handle' = 'fay_test') THEN
+    RAISE EXCEPTION 'FAIL: the moderator did not see the relay and its owner';
+  END IF;
+  PERFORM moderation_set_relay_disabled((SELECT id FROM relay_017), true);
+END $$;
+
+RESET ROLE;
+DO $$
+DECLARE v_id UUID := (SELECT id FROM relay_017); v_secret TEXT := (SELECT secret FROM relay_017);
+BEGIN
+  IF claim_relay_push(v_id, v_secret, 1) THEN
+    RAISE EXCEPTION 'FAIL: a switched-off relay still rang';
+  END IF;
+  UPDATE push_relays SET is_disabled = false WHERE id = v_id;
+  IF NOT claim_relay_push(v_id, v_secret, 1) THEN
+    RAISE EXCEPTION 'FAIL: a relay switched on again could not ring';
+  END IF;
+  RAISE NOTICE 'ok  only a moderator lists push relays and switches one off, and an off one rings nothing';
+END $$;
+
 ROLLBACK;

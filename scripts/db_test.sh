@@ -61,6 +61,9 @@ psql_migrate <<'SQL' >/dev/null
 CREATE SCHEMA IF NOT EXISTS auth;
 -- pg_net is installed here, and the push functions name it in search_path.
 CREATE SCHEMA IF NOT EXISTS extensions;
+-- Where Supabase's image puts pgcrypto, which enrolling and claiming a push
+-- relay use for their secrets.
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
 CREATE TABLE IF NOT EXISTS auth.users (
   id                 UUID PRIMARY KEY,
   email              VARCHAR(255),
