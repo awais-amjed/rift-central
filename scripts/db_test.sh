@@ -171,14 +171,26 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL     ON SEQUENCES TO postgres
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO postgres, anon, authenticated, service_role;
 SQL
 
+errors=$(mktemp)
 for f in "$ROOT"/migrations/[0-9][0-9][0-9]_*.sql; do
   # The extension warnings are pgcrypto's and pg_net's own functions, which
-  # live in `extensions` on a real Supabase and in `public` here.
+  # live in `extensions` on a real Supabase and in `public` here. psql's own
+  # status decides: filtering its messages once also swallowed its failure,
+  # and a migration that stopped half way was reported ok.
+  set +e
   sed 's/^CREATE EXTENSION IF NOT EXISTS pg_cron;/-- pg_cron: shimmed above/' "$f" \
-    | psql_migrate -f - 2>&1 >/dev/null \
-    | grep -v 'no privileges could be revoked' >&2 || true
+    | psql_migrate -f - 2>"$errors" >/dev/null
+  status=${PIPESTATUS[1]}
+  set -e
+  grep -v 'no privileges could be revoked' "$errors" >&2 || true
+  if [[ $status -ne 0 ]]; then
+    echo "   FAIL $(basename "$f")" >&2
+    rm -f "$errors"
+    exit 1
+  fi
   echo "   ok  $(basename "$f")"
 done
+rm -f "$errors"
 
 echo
 psql_scratch -f - < "$ROOT/migrations/tests/policies_test.sql" 2>&1 |
@@ -186,7 +198,31 @@ psql_scratch -f - < "$ROOT/migrations/tests/policies_test.sql" 2>&1 |
 
 echo
 echo "── nothing is reachable that was not granted by name ────────"
-psql_scratch <<'SQL' 2>&1 | sed 's/psql:<stdin>:[0-9]*: //'
+# What the migrations grant `authenticated` by name: every function and table
+# a GRANT statement names with that role in it. Supabase's defaults grant a
+# member everything new, so whatever a member can reach beyond this list is
+# reachable by accident, not by a line someone wrote.
+granted=$(python3 - "$ROOT"/migrations/[0-9][0-9][0-9]_*.sql <<'PY'
+import re, sys
+functions, tables = set(), set()
+for path in sys.argv[1:]:
+    text = re.sub(r'--[^\n]*', '', open(path).read())
+    for stmt in text.split(';'):
+        if not re.search(r'\bTO\b[^;]*\bauthenticated\b', stmt, re.I | re.S):
+            continue
+        m = re.search(r'GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+(?:public\.)?(\w+)', stmt, re.I)
+        if m:
+            functions.add(m.group(1))
+            continue
+        m = re.search(r'GRANT\s+[\w\s,()]+?\s+ON\s+(?:TABLE\s+)?([\w\s.,]+?)\s+TO\b', stmt, re.I | re.S)
+        if m and not re.match(r'(FUNCTION|SCHEMA|ALL|SEQUENCE)\b', m.group(1).strip(), re.I):
+            tables.update(t.strip().split('.')[-1] for t in m.group(1).split(','))
+rows = [f"('function', '{n}')" for n in sorted(functions)] + [f"('table', '{n}')" for n in sorted(tables)]
+print("CREATE TEMP TABLE granted_by_name (kind TEXT, name TEXT);")
+print("INSERT INTO granted_by_name VALUES " + ", ".join(rows) + ";")
+PY
+)
+{ echo "$granted"; cat <<'SQL'; } | psql_scratch 2>&1 | sed 's/psql:<stdin>:[0-9]*: //'
 SET client_min_messages = notice;
 DO $$
 DECLARE v_leaked TEXT;
@@ -237,6 +273,30 @@ BEGIN
     RAISE EXCEPTION 'FAIL: authenticated can read dm_conversation_heads';
   END IF;
   RAISE NOTICE 'ok  the conversation heads are read only through the RPC';
+
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO v_leaked
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.prorettype <> 'trigger'::regtype
+     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+     AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                      WHERE d.objid = p.oid AND d.deptype = 'e')
+     AND p.proname NOT IN (SELECT name FROM granted_by_name WHERE kind = 'function');
+  IF v_leaked IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: a member can call %, which no migration grants by name', v_leaked;
+  END IF;
+  RAISE NOTICE 'ok  a member can call only what a migration grants by name';
+
+  SELECT string_agg(DISTINCT c.relname, ', ') INTO v_leaked
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE')) pr(p)
+   WHERE c.relkind IN ('r','v') AND n.nspname = 'public'
+     AND has_table_privilege('authenticated', c.oid, pr.p)
+     AND c.relname NOT IN (SELECT name FROM granted_by_name WHERE kind = 'table');
+  IF v_leaked IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: a member can reach %, which no migration grants by name', v_leaked;
+  END IF;
+  RAISE NOTICE 'ok  a member can reach only the tables a migration grants by name';
 END $$;
 SQL
 echo
