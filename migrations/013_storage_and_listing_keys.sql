@@ -130,9 +130,11 @@ UPDATE storage.buckets SET allowed_mime_types = ARRAY['application/gzip', 'text/
 -- with a SET is never inlined, so both sides always agree.
 CREATE OR REPLACE FUNCTION server_url_key(p_url TEXT) RETURNS TEXT
   LANGUAGE sql IMMUTABLE SET search_path = pg_catalog AS $$
-  SELECT rtrim(regexp_replace(lower(substring(p_url FROM '^[A-Za-z]+://[^/?#]+')),
-                              ':443$', ''),
-               '.')
+  -- The trailing dot goes before or without a port: `host.:8443` is
+  -- `host:8443`.
+  SELECT regexp_replace(regexp_replace(lower(substring(p_url FROM '^[A-Za-z]+://[^/?#]+')),
+                                       ':443$', ''),
+                        '\.+(:[0-9]+)?$', '\1')
 $$;
 
 REVOKE ALL ON FUNCTION server_url_key(TEXT) FROM PUBLIC, anon, authenticated;

@@ -3055,7 +3055,9 @@ BEGIN
   IF server_url_key('https://Key.Example.com/') <> 'https://key.example.com'
      OR server_url_key('https://key.example.com:443') <> 'https://key.example.com'
      OR server_url_key('https://key.example.com./rest/v1?x#y') <> 'https://key.example.com'
-     OR server_url_key('https://key.example.com:8443/') <> 'https://key.example.com:8443' THEN
+     OR server_url_key('https://key.example.com:8443/') <> 'https://key.example.com:8443'
+     OR server_url_key('https://key.example.com.:8443') <> 'https://key.example.com:8443'
+     OR server_url_key('https://key.example.com.:443') <> 'https://key.example.com' THEN
     RAISE EXCEPTION 'FAIL: server_url_key spells one server two ways';
   END IF;
 
@@ -3337,17 +3339,19 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 
-  -- 19: the same phone, signed in to another account, rings for it.
+  -- A token registered by one account is not another's to take: a server
+  -- the member joined holds the same token.
   PERFORM set_config('request.jwt.claims', '{"sub":"' || v_fay || '","role":"authenticated"}', true);
   INSERT INTO device_tokens (token, user_id, platform) VALUES ('phone-1', v_fay::uuid, 'android');
   PERFORM set_config('request.jwt.claims', '{"sub":"' || v_gus || '","role":"authenticated"}', true);
-  INSERT INTO device_tokens (token, user_id, platform) VALUES ('phone-1', v_gus::uuid, 'android')
-  ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, updated_at = now();
-  IF NOT EXISTS (SELECT 1 FROM device_tokens WHERE token = 'phone-1' AND user_id = v_gus::uuid) THEN
-    RAISE EXCEPTION 'FAIL: the new account did not get the phone';
-  END IF;
+  BEGIN
+    INSERT INTO device_tokens (token, user_id, platform) VALUES ('phone-1', v_gus::uuid, 'android')
+    ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, updated_at = now();
+    RAISE EXCEPTION 'FAIL: another account took a registered token';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
 
-  RAISE NOTICE 'ok  blocks stop edits, read as nobody, and need a relationship; likes need a visible bot; a phone moves accounts';
+  RAISE NOTICE 'ok  blocks stop edits, read as nobody, and need a relationship; likes need a visible bot; a token stays with its account';
 END $$;
 
 RESET ROLE;
@@ -3357,8 +3361,8 @@ DECLARE
   v_hal TEXT := 'cccc0000-0000-4000-8000-0000000000f3';
   v_row public_servers%ROWTYPE;
 BEGIN
-  IF (SELECT user_id::text FROM device_tokens WHERE token = 'phone-1') <> 'cccc0000-0000-4000-8000-0000000000f2' THEN
-    RAISE EXCEPTION 'FAIL: the old account kept the phone';
+  IF (SELECT user_id::text FROM device_tokens WHERE token = 'phone-1') <> 'cccc0000-0000-4000-8000-0000000000f1' THEN
+    RAISE EXCEPTION 'FAIL: the token left its account';
   END IF;
 
   -- 12: an icon must be in the publisher's own folder.
@@ -3590,6 +3594,18 @@ BEGIN
   PERFORM set_config('request.jwt.claims', '{"sub":"' || v_ben || '","role":"authenticated"}', true);
   IF is_handle_available('hold_ann2') THEN
     RAISE EXCEPTION 'FAIL: the handle Ann went back from was not held for her';
+  END IF;
+
+  -- One hold per account: renaming again lets the one before go, so a list
+  -- of names cannot be held by renaming through it.
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_ann || '","role":"authenticated"}', true);
+  PERFORM claim_handle('hold_ann3', 'c', 's');
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_ben || '","role":"authenticated"}', true);
+  IF NOT is_handle_available('hold_ann2') THEN
+    RAISE EXCEPTION 'FAIL: an account held two dropped handles at once';
+  END IF;
+  IF is_handle_available('hold_ann') THEN
+    RAISE EXCEPTION 'FAIL: the handle last given up was not held';
   END IF;
 END $$;
 RESET ROLE;
