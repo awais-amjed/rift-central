@@ -7,7 +7,10 @@
 -- for its old owner to everybody who knew them by it.
 --
 -- Now a handle given up is held for 30 days (`released_handles`):
---   * after a rename, only the account that gave it up may take it back;
+--   * after a rename, only the account that gave it up may take it back.
+--     An account holds one handle at a time this way, the last it gave up:
+--     renaming again lets the one before go, so nobody can hold a list of
+--     names by renaming through it;
 --   * after the account is deleted, nobody may have it.
 -- Then it is free again, and the nightly job forgets it. Claiming a held
 -- handle fails as a taken one does (unique_violation), so a client already
@@ -57,6 +60,7 @@ CREATE OR REPLACE FUNCTION hold_renamed_handle() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   IF NEW.handle IS DISTINCT FROM OLD.handle THEN
+    DELETE FROM released_handles WHERE previous_owner = OLD.id;
     INSERT INTO released_handles (handle, previous_owner, released_at)
          VALUES (OLD.handle, OLD.id, now())
     ON CONFLICT (handle) DO UPDATE
