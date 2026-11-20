@@ -269,7 +269,7 @@ services:
                   kong.service.request.clear_header("authorization")
                 end
 
-  ## The three functions. No key-auth, as on rift-self-host: `push_send` and
+  ## The functions. No key-auth, as on rift-self-host: `push_send` and
   ## `sweep_dm_attachments` are called with a shared secret and no API key,
   ## and each function checks its own caller. The database reaches them
   ## directly on the internal network, not through here.
@@ -284,3 +284,24 @@ services:
           - /functions/v1/
     plugins:
       - name: cors
+  ## `server_pass` on a route of its own, for a limit per address: it writes
+  ## nothing down, so it cannot count an account's passes itself, and each one
+  ## is a signature and a database read. Caddy sets the header (see Auth's
+  ## GOTRUE_RATE_LIMIT_HEADER); a join asks once.
+  - name: functions-v1-server-pass
+    _comment: "Edge Functions: /functions/v1/server_pass -> http://functions:9000/server_pass"
+    url: http://functions:9000/server_pass
+    routes:
+      - name: functions-v1-server-pass
+        strip_path: true
+        paths:
+          - /functions/v1/server_pass
+    plugins:
+      - name: cors
+      - name: rate-limiting
+        config:
+          minute: 20
+          hour: 200
+          policy: local
+          limit_by: header
+          header_name: X-Rift-Client-IP

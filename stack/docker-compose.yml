@@ -61,7 +61,7 @@ services:
       # settings — and Kong otherwise keeps the old one and answers 502 until
       # it is restarted itself.
       KONG_DNS_VALID_TTL: 5
-      KONG_PLUGINS: request-transformer,cors,key-auth,acl,post-function
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,post-function,rate-limiting
       KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
       KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
 

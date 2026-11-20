@@ -81,7 +81,9 @@ function validFields(supabaseUrl: string, serverId: string, publicKey: string): 
   if (!UUID.test(serverId)) return false;
   try {
     const url = new URL(supabaseUrl);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    // https only, as a listing is: a server is known by its origin, so a pass
+    // for an http one is for a server that does not exist.
+    if (url.protocol !== "https:") return false;
     return fromB64(publicKey).length === 32;
   } catch {
     return false;
