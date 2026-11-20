@@ -3539,4 +3539,95 @@ BEGIN
   RAISE NOTICE 'ok  a server like is the caller''s own, once, on a listing they can see, and counted';
 END $$;
 
+-- ════════════════════════════════════════════════════════════
+-- A dropped handle is held for 30 days (020)
+-- ════════════════════════════════════════════════════════════
+INSERT INTO auth.users (id) VALUES
+  ('cccc0000-0000-4000-8000-000000002001'),
+  ('cccc0000-0000-4000-8000-000000002002'),
+  ('cccc0000-0000-4000-8000-000000002003');
+INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+  ('cccc0000-0000-4000-8000-000000002001', 'hold_ann', 'c', 's'),
+  ('cccc0000-0000-4000-8000-000000002002', 'hold_ben', 'c', 's'),
+  ('cccc0000-0000-4000-8000-000000002003', 'hold_cat', 'c', 's');
+
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE
+  v_ann UUID := 'cccc0000-0000-4000-8000-000000002001';
+  v_ben UUID := 'cccc0000-0000-4000-8000-000000002002';
+BEGIN
+  -- Ann renames; her old handle is hers alone to take back.
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_ann || '","role":"authenticated"}', true);
+  PERFORM claim_handle('hold_ann2', 'c', 's');
+  IF NOT is_handle_available('hold_ann') THEN
+    RAISE EXCEPTION 'FAIL: a handle was not available to the account holding it';
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_ben || '","role":"authenticated"}', true);
+  IF is_handle_available('hold_ann') THEN
+    RAISE EXCEPTION 'FAIL: a held handle was available to another account';
+  END IF;
+  BEGIN
+    PERFORM claim_handle('hold_ann', 'c', 's');
+    RAISE EXCEPTION 'FAIL: another account took a just-dropped handle';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  BEGIN
+    UPDATE users SET handle = 'hold_ann' WHERE id = v_ben;
+    RAISE EXCEPTION 'FAIL: another account took a just-dropped handle by update';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_ann || '","role":"authenticated"}', true);
+  PERFORM claim_handle('hold_ann', 'c', 's');
+  IF (SELECT handle FROM users WHERE id = v_ann) <> 'hold_ann' THEN
+    RAISE EXCEPTION 'FAIL: an account could not take its own handle back';
+  END IF;
+  -- Refreshing keys under the same handle is not a rename.
+  PERFORM claim_handle('hold_ann', 'c2', 's2');
+
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_ben || '","role":"authenticated"}', true);
+  IF is_handle_available('hold_ann2') THEN
+    RAISE EXCEPTION 'FAIL: the handle Ann went back from was not held for her';
+  END IF;
+END $$;
+RESET ROLE;
+
+DO $$
+DECLARE
+  v_ann UUID := 'cccc0000-0000-4000-8000-000000002001';
+  v_cat UUID := 'cccc0000-0000-4000-8000-000000002003';
+BEGIN
+  -- Deleted with its account: held for nobody, and the id is not kept.
+  DELETE FROM auth.users WHERE id = v_cat;
+  IF NOT EXISTS (SELECT 1 FROM released_handles WHERE handle = 'hold_cat' AND previous_owner IS NULL) THEN
+    RAISE EXCEPTION 'FAIL: a deleted account''s handle was not held for nobody';
+  END IF;
+  BEGIN
+    INSERT INTO users (id, handle, chat_public_key, signing_public_key)
+         VALUES (v_cat, 'hold_cat', 'c', 's');
+    RAISE EXCEPTION 'FAIL: a deleted account''s handle was taken at once';
+  EXCEPTION WHEN unique_violation OR foreign_key_violation THEN NULL;
+  END;
+
+  DELETE FROM auth.users WHERE id = v_ann;
+  IF EXISTS (SELECT 1 FROM released_handles WHERE previous_owner = v_ann) THEN
+    RAISE EXCEPTION 'FAIL: a deleted account''s id was kept with its holds';
+  END IF;
+
+  -- After the hold, free.
+  UPDATE released_handles SET released_at = now() - interval '31 days' WHERE handle = 'hold_cat';
+  UPDATE users SET handle = 'hold_cat' WHERE id = 'cccc0000-0000-4000-8000-000000002002';
+  IF EXISTS (SELECT 1 FROM released_handles WHERE handle = 'hold_cat') THEN
+    RAISE EXCEPTION 'FAIL: a taken handle kept its hold';
+  END IF;
+
+  IF has_table_privilege('authenticated', 'released_handles', 'SELECT')
+     OR has_table_privilege('anon', 'released_handles', 'SELECT') THEN
+    RAISE EXCEPTION 'FAIL: a session can read held handles';
+  END IF;
+  RAISE NOTICE 'ok  a dropped handle is held 30 days, for its account after a rename and for nobody after a deletion';
+END $$;
+
 ROLLBACK;
