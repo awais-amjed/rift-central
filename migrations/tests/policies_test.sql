@@ -3116,4 +3116,117 @@ BEGIN
   RAISE NOTICE 'ok  members hold no sequence';
 END $$;
 
+-- ============================================================
+-- How much one account may store (014)
+-- ============================================================
+-- fay and gus from above. Rows carry their size in `metadata` the way
+-- Storage writes them: `contentLength` on the check before the upload,
+-- `size` on the row after it.
+
+DO $$
+DECLARE
+  v_fay TEXT := 'cccc0000-0000-4000-8000-0000000000f1';
+BEGIN
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_fay || '","role":"authenticated"}', true);
+  INSERT INTO storage.objects (bucket_id, name, owner)
+  VALUES ('backups', v_fay || '/vault.json', v_fay::uuid);
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner)
+    VALUES ('backups', v_fay || '/vault-2.json', v_fay::uuid);
+    RAISE EXCEPTION 'FAIL: an account stored a second backup';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE storage.objects SET name = v_fay || '/elsewhere.json'
+     WHERE bucket_id = 'backups' AND name = v_fay || '/vault.json';
+    RAISE EXCEPTION 'FAIL: an account renamed its backup to make room for another';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  an account keeps one backup, the one the app writes';
+END $$;
+
+RESET ROLE;
+DO $$
+DECLARE
+  v_fay   TEXT := 'cccc0000-0000-4000-8000-0000000000f1';
+  v_gus   TEXT := 'cccc0000-0000-4000-8000-0000000000f2';
+  v_max   BIGINT := (account_storage_ceiling('central-dm-attachments')).max_bytes;
+  v_files INTEGER := (account_storage_ceiling('central-dm-attachments')).max_files;
+BEGIN
+  -- Fay holds all but 100 bytes of her space, in one file and in one row of
+  -- her own making that claims a negative size.
+  INSERT INTO storage.objects (bucket_id, name, owner, metadata) VALUES
+    ('central-dm-attachments', v_fay || '/big.bin', v_fay::uuid,
+     jsonb_build_object('size', v_max - 100)),
+    ('central-dm-attachments', v_fay || '/forged.bin', v_fay::uuid,
+     '{"size": "-999999999"}');
+END $$;
+
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE
+  v_fay TEXT := 'cccc0000-0000-4000-8000-0000000000f1';
+  v_gus TEXT := 'cccc0000-0000-4000-8000-0000000000f2';
+BEGIN
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_fay || '","role":"authenticated"}', true);
+  -- Exactly up to the ceiling is fine.
+  INSERT INTO storage.objects (bucket_id, name, owner, metadata)
+  VALUES ('central-dm-attachments', v_fay || '/last.bin', v_fay::uuid, '{"size": 100}');
+  -- Past it, refused on the size declared before the upload…
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
+    VALUES ('central-dm-attachments', v_fay || '/over.bin', v_fay::uuid,
+            '{"contentLength": 1}');
+    RAISE EXCEPTION 'FAIL: an account went past its DM file space before uploading';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'account_storage_full' THEN RAISE; END IF;
+  END;
+  -- …and on the size written after it.
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
+    VALUES ('central-dm-attachments', v_fay || '/over.bin', v_fay::uuid, '{"size": 1}');
+    RAISE EXCEPTION 'FAIL: an account went past its DM file space';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'account_storage_full' THEN RAISE; END IF;
+  END;
+
+  -- Somebody else's space is their own.
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_gus || '","role":"authenticated"}', true);
+  INSERT INTO storage.objects (bucket_id, name, owner, metadata)
+  VALUES ('central-dm-attachments', v_gus || '/mine.bin', v_gus::uuid, '{"size": 1000}');
+  RAISE NOTICE 'ok  an account''s DM files stop at its ceiling, declared or written';
+END $$;
+
+RESET ROLE;
+DO $$
+DECLARE
+  v_gus   TEXT := 'cccc0000-0000-4000-8000-0000000000f2';
+  v_files INTEGER := (account_storage_ceiling('central-dm-attachments')).max_files;
+BEGIN
+  -- Empty files cost no bytes, so the count is what bounds them. Gus has
+  -- some from above.
+  INSERT INTO storage.objects (bucket_id, name, owner, metadata)
+  SELECT 'central-dm-attachments', v_gus || '/empty-' || i || '.bin', v_gus::uuid, '{"size": 0}'
+    FROM generate_series(1, v_files - (SELECT count(*) FROM storage.objects
+                                         WHERE bucket_id = 'central-dm-attachments'
+                                           AND name LIKE v_gus || '/%')) i;
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
+    VALUES ('central-dm-attachments', v_gus || '/one-more.bin', v_gus::uuid, '{"size": 0}');
+    RAISE EXCEPTION 'FAIL: an account stored DM files without a count bound';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'account_storage_full' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
+    VALUES ('bug-reports', v_gus || '/eeee0000-0000-4000-8000-0000000000aa/log.gz', v_gus::uuid,
+            jsonb_build_object('size', (account_storage_ceiling('bug-reports')).max_bytes + 1));
+    RAISE EXCEPTION 'FAIL: an account stored bug-report files without bound';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'account_storage_full' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  DM files are bounded in number, bug-report files in bytes';
+END $$;
+
 ROLLBACK;
