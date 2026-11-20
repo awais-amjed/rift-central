@@ -3229,4 +3229,41 @@ BEGIN
   RAISE NOTICE 'ok  DM files are bounded in number, bug-report files in bytes';
 END $$;
 
+-- ════════════════════════════════════════════════════════════
+-- What a deleted account leaves behind (015)
+-- ════════════════════════════════════════════════════════════
+RESET ROLE;
+DO $$
+DECLARE
+  v_gus  TEXT := 'cccc0000-0000-4000-8000-0000000000f2';
+  v_gone TEXT := 'cccc0000-0000-4000-8000-00000000dead';
+  v_job  TEXT;
+BEGIN
+  -- Auth's audit rows go every night, so a restored dump's do not stay.
+  SELECT command INTO v_job FROM cron.job WHERE jobname = 'central-audit-log-prune';
+  IF v_job IS NULL THEN
+    RAISE EXCEPTION 'FAIL: nothing prunes Auth''s audit log';
+  END IF;
+  INSERT INTO auth.audit_log_entries (instance_id, id, payload, created_at, ip_address)
+  VALUES ('00000000-0000-0000-0000-000000000000', gen_random_uuid(),
+          '{"actor_username":"someone@example.com"}', now(), '198.51.100.7');
+  EXECUTE v_job;
+  IF EXISTS (SELECT 1 FROM auth.audit_log_entries) THEN
+    RAISE EXCEPTION 'FAIL: the prune left audit rows';
+  END IF;
+
+  -- A backup whose account is gone is offered to the sweep; a live one is not.
+  INSERT INTO storage.objects (bucket_id, name, owner)
+  VALUES ('backups', v_gus || '/vault.json', v_gus::uuid),
+         ('backups', v_gone || '/vault.json', v_gone::uuid);
+  IF ARRAY(SELECT orphaned_backups()) <> ARRAY[v_gone || '/vault.json'] THEN
+    RAISE EXCEPTION 'FAIL: orphaned_backups named %', ARRAY(SELECT orphaned_backups());
+  END IF;
+  IF has_function_privilege('authenticated', 'orphaned_backups(integer)', 'EXECUTE')
+     OR has_function_privilege('anon', 'orphaned_backups(integer)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: a caller can list orphaned backups';
+  END IF;
+  RAISE NOTICE 'ok  audit rows are pruned and orphaned backups go to the sweep';
+END $$;
+
 ROLLBACK;

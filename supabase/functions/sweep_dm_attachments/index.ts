@@ -4,9 +4,9 @@ import { createClient } from "@supabase/supabase-js";
 /**
  * Deletes the blobs the database says nothing points at any more.
  *
- * Three buckets, one call. DM attachments whose messages retention has
- * removed, directory icons no listing names, and bug report logs whose report
- * is gone — the last two ride along rather than getting functions of their
+ * Four buckets, one call. DM attachments whose messages retention has
+ * removed, directory icons no listing names, bug report logs whose report
+ * is gone, and backups whose account is gone — the last three ride along rather than getting functions of their
  * own because each would need the same secret, the same config row and
  * another entry in the same cron job to do the same thing: ask the database
  * what is unreferenced and hand the list to Storage.
@@ -24,6 +24,7 @@ import { createClient } from "@supabase/supabase-js";
 const BUCKET = "central-dm-attachments";
 const ICON_BUCKET = "directory-icons";
 const BUG_REPORT_BUCKET = "bug-reports";
+const BACKUP_BUCKET = "backups";
 
 /** Blobs per database query and per Storage API call. */
 const BATCH = 1000;
@@ -61,12 +62,21 @@ Deno.serve(async (req) => {
   // deletes the report after 90 days.
   const logs = await drain(BUG_REPORT_BUCKET, "expired_bug_report_files");
   const logsSwept = "error" in logs ? 0 : logs.swept;
+  // And a backup whose account was removed some way other than
+  // `delete_account`, or uploaded in the hour after: nothing else removes one.
+  const backups = await drain(BACKUP_BUCKET, "orphaned_backups");
+  const backupsSwept = "error" in backups ? 0 : backups.swept;
 
   console.log(
     `[sweep] removed ${attachments.swept} expired attachment(s), ${iconsSwept} unused icon(s), ` +
-      `${logsSwept} expired bug report log(s)`,
+      `${logsSwept} expired bug report log(s), ${backupsSwept} orphaned backup(s)`,
   );
-  return json({ swept: attachments.swept, icons: iconsSwept, logs: logsSwept });
+  return json({
+    swept: attachments.swept,
+    icons: iconsSwept,
+    logs: logsSwept,
+    backups: backupsSwept,
+  });
 });
 
 /**

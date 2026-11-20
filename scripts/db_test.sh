@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS auth.sessions (
   updated_at   TIMESTAMPTZ DEFAULT now(),
   refreshed_at TIMESTAMP
 );
+-- GoTrue's record of sign-ins, which 015 empties and prunes.
+CREATE TABLE IF NOT EXISTS auth.audit_log_entries (
+  instance_id UUID,
+  id          UUID PRIMARY KEY,
+  payload     JSON,
+  created_at  TIMESTAMPTZ,
+  ip_address  VARCHAR(64) NOT NULL DEFAULT ''
+);
 
 -- Exactly Supabase's own: nullif BEFORE the cast, or an empty setting — which
 -- is what a RESET leaves behind — raises instead of reading as "nobody".

@@ -77,10 +77,22 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Auth logs every sign-in with its address and IP, and is the only place
+    # that record now lives (GOTRUE_AUDIT_LOG_DISABLE_POSTGRES below), so it
+    # is kept to a few days' worth rather than for as long as the container.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
       API_EXTERNAL_URL: ${API_EXTERNAL_URL:-}
+      # Not in the database: those rows (address, IP, browser for every
+      # sign-in) named no account by key, so deleting one left them, and
+      # every hourly dump carried them. Auth's own log still has each event.
+      GOTRUE_AUDIT_LOG_DISABLE_POSTGRES: "true"
 
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD:-}@db:5432/postgres
