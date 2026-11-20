@@ -135,17 +135,19 @@ services:
       # in words, and the app's resend cooldown is these same 60 seconds.
       GOTRUE_MAILER_OTP_EXP: 3600
       GOTRUE_SMTP_MAX_FREQUENCY: 60s
-      # Two limits on email, and the second must stay well under the first.
-      # EMAIL_SENT is one count for everybody (Auth keys it by nothing), reset
-      # on the hour: at 30 one caller signing up 30 made-up addresses stopped
-      # every confirmation and reset for everyone. OTP is per address (the
-      # header below) on sign-up, resend, recover and changing the account:
-      # a burst of 30, which Auth fixes, then one more every five minutes —
-      # so one address sends at most 42 in an hour and 12 an hour after, and
-      # it takes several to use up the shared 200. 200 an hour is a small
-      # share of SES's 50,000 a day, and still bounds what a flood of made-up
-      # addresses can do to the sending reputation.
-      GOTRUE_RATE_LIMIT_EMAIL_SENT: 200
+      # Email is limited per person, and once for everybody as a backstop.
+      # Per person: one email to an address a minute (SMTP_MAX_FREQUENCY
+      # above), and OTP, per caller IP (the header below), on sign-up,
+      # resend, recover and changing the account: a burst of 30, which Auth
+      # fixes, then one more every five minutes.
+      # EMAIL_SENT is the backstop: one count for everybody, reset on the
+      # hour, and it cannot be switched off (0 refuses every email). At 30,
+      # one caller signing up 30 made-up addresses stopped every confirmation
+      # and reset for everyone. 2000 an hour is SES's 50,000 a day spread
+      # over the day, so it only bites when SES would soon refuse anyway, or
+      # when many callers flood made-up addresses, which would hurt the
+      # sending reputation.
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: 2000
       GOTRUE_RATE_LIMIT_OTP: 1
       # Auth limits sign-ins, verifications and refreshes per address only
       # when told which header holds the address; without this it limits
