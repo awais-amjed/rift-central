@@ -3266,4 +3266,127 @@ BEGIN
   RAISE NOTICE 'ok  audit rows are pruned and orphaned backups go to the sweep';
 END $$;
 
+-- ════════════════════════════════════════════════════════════
+-- The review's smaller holes (016)
+-- ════════════════════════════════════════════════════════════
+-- fay and gus (above) are friends now; hal knows neither. fay has a listed
+-- and a delisted bot, and hal a hidden server.
+RESET ROLE;
+INSERT INTO friendships (low_id, high_id, requester_id, status) VALUES
+  ('cccc0000-0000-4000-8000-0000000000f1', 'cccc0000-0000-4000-8000-0000000000f2',
+   'cccc0000-0000-4000-8000-0000000000f1', 'accepted');
+INSERT INTO public_bots (id, owner_id, name, source_url, is_listed) VALUES
+  ('eeee0000-0000-4000-8000-0000000000b1', 'cccc0000-0000-4000-8000-0000000000f1',
+   'listedbot', 'https://example.com/a', TRUE),
+  ('eeee0000-0000-4000-8000-0000000000b2', 'cccc0000-0000-4000-8000-0000000000f1',
+   'quietbot', 'https://example.com/b', FALSE);
+INSERT INTO public_servers (owner_id, supabase_url, server_id, invite_code, name,
+                            is_listed, hidden_at, hidden_reason) VALUES
+  ('cccc0000-0000-4000-8000-0000000000f3', 'https://hidden.example.com',
+   'eeee0000-0000-4000-8000-0000000000c1', 'code', 'Hidden Place', TRUE, now(), 'spam');
+
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE
+  v_fay TEXT := 'cccc0000-0000-4000-8000-0000000000f1';
+  v_gus TEXT := 'cccc0000-0000-4000-8000-0000000000f2';
+  v_hal TEXT := 'cccc0000-0000-4000-8000-0000000000f3';
+  v_n   INTEGER;
+BEGIN
+  -- 18: a friend edits; once blocked, the same edit changes nothing.
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_fay || '","role":"authenticated"}', true);
+  UPDATE dm_messages SET ciphertext = 'edited' WHERE sender_id = v_fay::uuid;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'FAIL: a friend could not edit their message'; END IF;
+
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_gus || '","role":"authenticated"}', true);
+  PERFORM block_user(v_fay::uuid);
+
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_fay || '","role":"authenticated"}', true);
+  UPDATE dm_messages SET ciphertext = 'edited again' WHERE sender_id = v_fay::uuid;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  IF v_n <> 0 THEN RAISE EXCEPTION 'FAIL: a blocked sender rewrote a message'; END IF;
+
+  -- 8: being blocked reads as nobody, not as blocked.
+  BEGIN
+    PERFORM friend_request(v_gus::uuid);
+    RAISE EXCEPTION 'FAIL: a blocked account sent a friend request';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'no_such_user' THEN
+      RAISE EXCEPTION 'FAIL: being blocked answered %', SQLERRM;
+    END IF;
+  END;
+
+  -- 11: a stranger's id cannot be blocked into the blocked list.
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_hal || '","role":"authenticated"}', true);
+  BEGIN
+    PERFORM block_user(v_fay::uuid);
+    RAISE EXCEPTION 'FAIL: a stranger blocked an id they had no relationship with';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'recipient_has_no_profile' THEN RAISE; END IF;
+  END;
+  IF jsonb_array_length(friend_bucket('blocked') -> 'rows') <> 0 THEN
+    RAISE EXCEPTION 'FAIL: the blocked list named a stranger';
+  END IF;
+
+  -- 20: a like needs a bot the liker can see.
+  INSERT INTO bot_likes (bot_id, user_id) VALUES ('eeee0000-0000-4000-8000-0000000000b1', v_hal::uuid);
+  BEGIN
+    INSERT INTO bot_likes (bot_id, user_id) VALUES ('eeee0000-0000-4000-8000-0000000000b2', v_hal::uuid);
+    RAISE EXCEPTION 'FAIL: a delisted bot took a stranger''s like';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  -- 19: the same phone, signed in to another account, rings for it.
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_fay || '","role":"authenticated"}', true);
+  INSERT INTO device_tokens (token, user_id, platform) VALUES ('phone-1', v_fay::uuid, 'android');
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_gus || '","role":"authenticated"}', true);
+  INSERT INTO device_tokens (token, user_id, platform) VALUES ('phone-1', v_gus::uuid, 'android')
+  ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, updated_at = now();
+  IF NOT EXISTS (SELECT 1 FROM device_tokens WHERE token = 'phone-1' AND user_id = v_gus::uuid) THEN
+    RAISE EXCEPTION 'FAIL: the new account did not get the phone';
+  END IF;
+
+  RAISE NOTICE 'ok  blocks stop edits, read as nobody, and need a relationship; likes need a visible bot; a phone moves accounts';
+END $$;
+
+RESET ROLE;
+DO $$
+DECLARE
+  v_fay TEXT := 'cccc0000-0000-4000-8000-0000000000f1';
+  v_hal TEXT := 'cccc0000-0000-4000-8000-0000000000f3';
+  v_row public_servers%ROWTYPE;
+BEGIN
+  IF (SELECT user_id::text FROM device_tokens WHERE token = 'phone-1') <> 'cccc0000-0000-4000-8000-0000000000f2' THEN
+    RAISE EXCEPTION 'FAIL: the old account kept the phone';
+  END IF;
+
+  -- 12: an icon must be in the publisher's own folder.
+  BEGIN
+    INSERT INTO public_bots (owner_id, name, source_url, icon_path)
+    VALUES (v_fay::uuid, 'thief', 'https://example.com/t', v_hal || '/their-icon');
+    RAISE EXCEPTION 'FAIL: a listing named another account''s icon';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'icon_not_yours' THEN RAISE; END IF;
+  END;
+
+  -- 7: a hidden listing's account is deleted, and the server comes back hidden.
+  DELETE FROM auth.users WHERE id = v_hal::uuid;
+  IF NOT EXISTS (SELECT 1 FROM directory_ban_marks
+                  WHERE kind = 'hidden' AND server_id = 'eeee0000-0000-4000-8000-0000000000c1') THEN
+    RAISE EXCEPTION 'FAIL: deleting the account left no hidden mark';
+  END IF;
+  INSERT INTO public_servers (owner_id, supabase_url, server_id, invite_code, name, is_listed)
+  VALUES (v_fay::uuid, 'https://HIDDEN.example.com/', 'eeee0000-0000-4000-8000-0000000000c1',
+          'code', 'Hidden Again', TRUE)
+  RETURNING * INTO v_row;
+  IF v_row.hidden_at IS NULL OR v_row.hidden_reason IS DISTINCT FROM 'spam' THEN
+    RAISE EXCEPTION 'FAIL: the server came back shown';
+  END IF;
+  IF EXISTS (SELECT 1 FROM directory_ban_marks WHERE kind = 'hidden') THEN
+    RAISE EXCEPTION 'FAIL: the hidden mark was not used up';
+  END IF;
+  RAISE NOTICE 'ok  icons are the publisher''s own, and a hide outlives the account';
+END $$;
+
 ROLLBACK;
