@@ -8,7 +8,8 @@
 --       shown. Deleting now leaves a `hidden` mark, like a ban's (010), and
 --       the next listing of that server lands hidden with the same reason.
 --   8   `friend_request` by id told an account it was blocked. Being blocked
---       now answers `no_such_user`, as the by-handle path always has.
+--       now answers as an id with no account (`recipient_has_no_profile`),
+--       as the by-handle path answers as a handle nobody owns.
 --   11  `block_user` took any id, and the blocked list then gave back the
 --       handle and both public keys of a stranger. Blocking now needs the
 --       relationship the client can already see (`knows_user`); anything
@@ -108,10 +109,11 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user) THEN
     RAISE EXCEPTION 'recipient_has_no_profile';
   END IF;
-  -- Theirs first, and in the same words the by-handle path uses, so the
-  -- answer does not say who decided.
+  -- Theirs first, and in the words an id with no account gets, so the
+  -- answer cannot be told from one: the by-handle path does the same with a
+  -- handle nobody owns.
   IF EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = p_user AND b.blocked_id = v_me) THEN
-    RAISE EXCEPTION 'no_such_user';
+    RAISE EXCEPTION 'recipient_has_no_profile';
   END IF;
   IF EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = v_me AND b.blocked_id = p_user) THEN
     RAISE EXCEPTION 'blocked';

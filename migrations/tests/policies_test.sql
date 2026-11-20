@@ -3309,13 +3309,21 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   IF v_n <> 0 THEN RAISE EXCEPTION 'FAIL: a blocked sender rewrote a message'; END IF;
 
-  -- 8: being blocked reads as nobody, not as blocked.
+  -- 8: being blocked reads as an id with no account, not as blocked.
   BEGIN
     PERFORM friend_request(v_gus::uuid);
     RAISE EXCEPTION 'FAIL: a blocked account sent a friend request';
   EXCEPTION WHEN raise_exception THEN
-    IF SQLERRM <> 'no_such_user' THEN
+    IF SQLERRM <> 'recipient_has_no_profile' THEN
       RAISE EXCEPTION 'FAIL: being blocked answered %', SQLERRM;
+    END IF;
+  END;
+  BEGIN
+    PERFORM friend_request('cccc0000-0000-4000-8000-0000000000ff'::uuid);
+    RAISE EXCEPTION 'FAIL: a request went to an id with no account';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'recipient_has_no_profile' THEN
+      RAISE EXCEPTION 'FAIL: an id with no account answered %, unlike being blocked', SQLERRM;
     END IF;
   END;
 
