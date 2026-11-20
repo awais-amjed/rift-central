@@ -40,6 +40,9 @@ const BUCKETS = ["backups", "central-dm-attachments", "bug-reports", "directory-
 /** How recent the password sign-in must be. */
 const REAUTH_SECONDS = 10 * 60;
 
+/** How long after a password change the account cannot be deleted. */
+const PASSWORD_HOLD_MS = 24 * 60 * 60 * 1000;
+
 /** Names per Storage API listing and per removal. */
 const PAGE = 1000;
 
@@ -65,6 +68,20 @@ Deno.serve(async (req) => {
       return fail("unexpected_error", 500);
     }
     if (admin) return fail("moderator_account", 403);
+
+    // Not the day the password changed (018): a session under a day old may
+    // set one with no emailed code, so a copied token could otherwise set a
+    // password, sign in with it and get here. The owner is emailed about the
+    // change, and this day is theirs to take the account back.
+    const { data: change, error: changeError } = await supabase
+      .from("password_changes").select("changed_at").eq("user_id", uid).maybeSingle();
+    if (changeError) {
+      console.error("[delete_account] reading password_changes:", changeError);
+      return fail("unexpected_error", 500);
+    }
+    if (change && Date.now() - Date.parse(change.changed_at) < PASSWORD_HOLD_MS) {
+      return fail("password_changed_recently", 403);
+    }
 
     // Files first: once the user is gone, nothing says whose folder this was.
     for (const bucket of BUCKETS) {

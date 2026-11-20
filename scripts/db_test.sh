@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS auth.users (
   email              VARCHAR(255),
   created_at         TIMESTAMPTZ DEFAULT now(),
   email_confirmed_at TIMESTAMPTZ,
-  last_sign_in_at    TIMESTAMPTZ
+  last_sign_in_at    TIMESTAMPTZ,
+  encrypted_password VARCHAR(255)
 );
 -- GoTrue's, with its one column that has no zone.
 CREATE TABLE IF NOT EXISTS auth.sessions (

@@ -3439,4 +3439,28 @@ BEGIN
   RAISE NOTICE 'ok  only a moderator lists push relays and switches one off, and an off one rings nothing';
 END $$;
 
+-- ════════════════════════════════════════════════════════════
+-- A password change is remembered (018)
+-- ════════════════════════════════════════════════════════════
+DO $$
+DECLARE v_fay UUID := 'cccc0000-0000-4000-8000-0000000000f1';
+BEGIN
+  -- The first password is not a change.
+  UPDATE auth.users SET encrypted_password = 'first' WHERE id = v_fay;
+  UPDATE auth.users SET email = 'fay@example.com' WHERE id = v_fay;
+  IF EXISTS (SELECT 1 FROM password_changes WHERE user_id = v_fay) THEN
+    RAISE EXCEPTION 'FAIL: a first password, or another column, counted as a change';
+  END IF;
+  UPDATE auth.users SET encrypted_password = 'second' WHERE id = v_fay;
+  IF NOT EXISTS (SELECT 1 FROM password_changes
+                  WHERE user_id = v_fay AND changed_at > now() - interval '1 minute') THEN
+    RAISE EXCEPTION 'FAIL: a password change was not remembered';
+  END IF;
+  IF has_table_privilege('authenticated', 'password_changes', 'SELECT')
+     OR has_table_privilege('anon', 'password_changes', 'SELECT') THEN
+    RAISE EXCEPTION 'FAIL: a session can read password changes';
+  END IF;
+  RAISE NOTICE 'ok  a password change is remembered, and only the service key reads it';
+END $$;
+
 ROLLBACK;
