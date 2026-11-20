@@ -63,6 +63,13 @@ backups. So it has a report button and moderators.
   by anyone (`server_banned`) until a moderator lifts the mark
   (`moderation_ban_marks`, `moderation_lift_ban_mark`). A different address
   still gets round it, as a second account always did.
+- **So does a hide.** Deleting an account that was not banned but had a hidden
+  server listing leaves a `hidden` mark for that server; its next listing, by
+  whoever publishes it, is hidden as it is made, with the same reason, and the
+  mark is used up (`rehide_marked_server`).
+- **An icon is the publisher's own.** A listing may only name a picture in its
+  owner's folder (`refuse_foreign_icon`), so nobody pins another account's icon
+  against the sweep or spends their allowance.
 
 **A moderator is a separate account, not a Rift account.** It is an auth user
 with a password and no profile, listed in `central_admins`; a trigger stops a
