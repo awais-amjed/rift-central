@@ -322,9 +322,11 @@ services:
       - ../supabase/functions/delete_account:/home/deno/functions/delete_account:ro
       - ../supabase/functions/server_pass:/home/deno/functions/server_pass:ro
       - deno-cache:/root/.cache/deno
-    # Only what the functions read. The router hands its whole environment to
-    # every worker, so anything else put here — the database password, the
-    # JWT secret — would be one bug in a function away from leaking.
+    # Only what the functions read. The router (functions/main) hands each
+    # worker the secrets its function reads and no others, and everything
+    # here that is not a secret; anything else put here — the database
+    # password, the JWT secret — would be one bug in a function away from
+    # leaking. A new secret is named in the router as well as here.
     environment:
       SUPABASE_URL: http://kong:8000
       RIFT_SECRET_KEY: ${SECRET_KEY:-}
