@@ -193,10 +193,12 @@ and DM attachments expire in 30 days regardless.
 ./restore.sh 2026-09-26T210700Z     # a particular one (or 2026-09-26, 2026-W39)
 ```
 
-It asks before it replaces anything. It stops the services, loads the dump's
-rows into the tables, copies back the files that dump names — including ones
-that had already left the server — removes files it does not name, and runs
-`up.sh`. The schema comes from the migrations, not the dump, so restoring onto
+It asks before it replaces anything. It waits for a running backup and holds
+off the next (the lock `backup.sh` takes), stops the services, replaces the
+tables' rows with the dump's in one transaction — a load that fails leaves the
+database as it was — copies back the files that dump names, including ones
+that had already left the server, removes files it does not name (none, if the
+restored database names none), and runs `up.sh`. The schema comes from the migrations, not the dump, so restoring onto
 a new machine is: this checkout, the offline `.env`, `./up.sh` once, then
 `./restore.sh`.
 
@@ -204,5 +206,7 @@ Proved locally on 26 September 2026 against a stand-in bucket: a stack wiped
 to nothing and restored came back with every account signing in with its
 password, the moderator's authenticator working, and every file byte-identical;
 restoring an older dump brought back the vault backup that had since been
-replaced.
+replaced. The one-transaction load was proved on 20 November 2026 on the local
+stack: a load made to fail after the tables were emptied, and a cut-off dump,
+each left every row in place.
 

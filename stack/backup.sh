@@ -39,7 +39,8 @@ log() { echo "[backup] $*"; }
 # fs.protected_regular), and every hourly run as root failed on it, silently,
 # from the first hand-run backup on.
 exec 9<"${BASH_SOURCE[0]}"
-flock -n 9 || { log "another backup is still running"; exit 0; }
+# restore.sh takes the same lock, so no dump is taken of a restore half done.
+flock -n 9 || { log "another backup, or a restore, is still running"; exit 0; }
 
 if [[ ${1:-} == --rules ]]; then
   bucket=$(env_value BACKUP_BUCKET)

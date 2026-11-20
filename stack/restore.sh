@@ -12,9 +12,12 @@
 #
 # What it does:
 #
-#   1. Stops everything but the database, so nothing writes mid-restore.
+#   1. Waits out a running backup and holds off the next until this is done
+#      (the lock backup.sh takes), then stops everything but the database,
+#      so nothing writes mid-restore and no dump is taken of half of one.
 #   2. Empties the tables of the three schemas the backup holds (public, auth,
-#      storage) and loads the dump's rows into them. The schema itself comes
+#      storage) and loads the dump's rows into them, in one transaction: a
+#      load that fails leaves the database as it was. The schema itself comes
 #      from the migrations and the services, which is why up.sh runs first;
 #      only rows travel. Each service's own record of its migrations is left
 #      alone, so it does not try to run them again.
@@ -23,7 +26,9 @@
 #      the dump was taken, which the dump still names. Then removes every
 #      file the restored database does not name: those folders hold whole
 #      days, so they bring back versions older than the dump too, and an
-#      in-place restore leaves behind what was uploaded after it.
+#      in-place restore leaves behind what was uploaded after it. A restored
+#      database that names no file at all removes nothing: that is a dump
+#      gone wrong far more often than a central with no files.
 #   4. Runs up.sh, which starts everything, applies any migration this
 #      database has not run, and writes the function config rows.
 set -euo pipefail
@@ -79,12 +84,20 @@ if ! $yes; then
 fi
 
 # ── 1. Quiet ────────────────────────────────────────────────
+# The lock backup.sh takes on itself. Held to the end, so the hourly run that
+# comes due meanwhile finds it taken and skips, instead of dumping a database
+# half way through being replaced — the dump a later restore would pick.
+exec 9<./backup.sh
+if ! flock -n 9; then
+  log "waiting for the running backup to finish"
+  flock 9
+fi
 docker compose stop kong auth rest realtime storage functions >/dev/null 2>&1
 log "stopped the services"
 
 # ── 2. The database ─────────────────────────────────────────
 work=$(mktemp -d); chmod 700 "$work"
-trap 'rm -rf "$work"; docker exec central-db rm -f /tmp/restore.dump /tmp/restore.list' EXIT
+trap 'rm -rf "$work"; docker exec central-db rm -f /tmp/restore.dump /tmp/restore.list /tmp/restore.sql' EXIT
 rc -- cat "db:$dump" > "$work/central.dump"
 log "downloaded $dump ($(stat -c %s "$work/central.dump") bytes)"
 docker exec -i central-db sh -c 'umask 077; cat > /tmp/restore.dump' < "$work/central.dump"
@@ -94,7 +107,16 @@ docker exec -i central-db sh -c \
   "pg_restore -l /tmp/restore.dump |
    grep -vE ' TABLE DATA (auth schema_migrations|storage migrations) ' > /tmp/restore.list"
 
-docker exec -i central-db psql -U supabase_admin -d postgres -q -v ON_ERROR_STOP=1 <<'SQL'
+# The rows as SQL, written whole before anything is emptied: a dump that
+# cannot be read stops here, with the database untouched.
+docker exec central-db sh -c 'umask 077; pg_restore --data-only --disable-triggers \
+  -L /tmp/restore.list -f /tmp/restore.sql /tmp/restore.dump'
+
+# Emptied and filled in one transaction. The TRUNCATE once committed on its
+# own, so a load that failed after it left production empty. ON_ERROR_STOP
+# ends psql at the first error, before the COMMIT, which rolls it all back.
+{ cat <<'SQL'
+BEGIN;
 DO $$
 DECLARE v_tables TEXT;
 BEGIN
@@ -107,8 +129,10 @@ BEGIN
   EXECUTE 'TRUNCATE ' || v_tables || ' CASCADE';
 END $$;
 SQL
-docker exec central-db pg_restore -U supabase_admin -d postgres --data-only \
-  --disable-triggers --single-transaction -L /tmp/restore.list /tmp/restore.dump
+  echo '\i /tmp/restore.sql'
+  echo 'COMMIT;'
+} | docker exec -i central-db psql -U supabase_admin -d postgres -q -v ON_ERROR_STOP=1 >/dev/null \
+  || { log "the load failed; the database is as it was, and the services are stopped (./up.sh starts them)"; exit 1; }
 log "loaded the database"
 
 # ── 3. Storage's files ──────────────────────────────────────
@@ -124,6 +148,10 @@ done
 # and the database names exactly those.
 docker exec central-db psql -U supabase_admin -d postgres -tAc \
   "select bucket_id || '/' || name || '/' || version from storage.objects" > "$work/wanted"
+if [[ ! -s $work/wanted ]]; then
+  log "the restored database names no file, so none is removed: check the dump before trusting it"
+  removed=0
+else
 removed=$(docker run --rm -i -v "$STORAGE_VOLUME:/data" --entrypoint sh "$RCLONE_IMAGE" -c '
     cd /data/stub/stub 2>/dev/null || exit 0
     sort > /tmp/wanted
@@ -132,6 +160,7 @@ removed=$(docker run --rm -i -v "$STORAGE_VOLUME:/data" --entrypoint sh "$RCLONE
     while IFS= read -r f; do rm -f -- "$f"; done < /tmp/extra
     find . -mindepth 1 -type d -empty -delete
     wc -l < /tmp/extra' < "$work/wanted")
+fi
 log "restored storage (removed $removed file(s) the backup does not name)"
 
 # ── 4. Back up ──────────────────────────────────────────────
