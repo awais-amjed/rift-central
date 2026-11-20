@@ -77,7 +77,13 @@ Deno.serve(async (req) => {
     });
 
     // The RPC raises bare identifiers the client already knows how to read.
-    if (error) return fail(error.message, 400);
+    // Anything else is the database talking (a constraint, a type), whose
+    // wording names tables and columns: logged here, not handed back.
+    if (error) {
+      if (/^[a-z_]{1,64}$/.test(error.message)) return fail(error.message, 400);
+      console.error("[publish_server] publish_server_as:", error);
+      return fail("unexpected_error", 500);
+    }
     return json(data, 200);
   } catch (err) {
     console.error("[publish_server]", err);
