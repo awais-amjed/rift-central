@@ -19,10 +19,6 @@
 --   18  A blocked sender could still rewrite old messages, and each edit rang
 --       the blocker. Editing a DM now needs the two to be friends, as
 --       sending one does.
---   19  A phone that changed hands kept ringing for its old account: the new
---       owner's upsert of the same token hit the old row's policy. The row
---       now moves to whoever registers the token, which is the account
---       signed in on that phone.
 --   20  A like could be added to a bot nobody may see, and its success
 --       said the bot existed. A like now needs a bot the caller can read.
 -- ============================================================
@@ -207,24 +203,6 @@ CREATE POLICY dm_messages_update_own ON dm_messages FOR UPDATE TO authenticated
   WITH CHECK (sender_id = auth.uid() AND friendship_state(recipient_id) = 'friends');
 
 -- ============================================================
--- 19. A token belongs to the account that registered it last
--- ============================================================
--- Before the insert's conflict check, so the upsert the app sends finds no
--- other account's row in its way. Taking a row needs the token itself, which
--- only the phone it names has.
-
-CREATE OR REPLACE FUNCTION take_device_token() RETURNS TRIGGER
-  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-BEGIN
-  DELETE FROM device_tokens WHERE token = NEW.token AND user_id <> NEW.user_id;
-  RETURN NEW;
-END; $$;
-
-DROP TRIGGER IF EXISTS device_tokens_take ON device_tokens;
-CREATE TRIGGER device_tokens_take BEFORE INSERT ON device_tokens
-  FOR EACH ROW EXECUTE FUNCTION take_device_token();
-
--- ============================================================
 -- 20. A like needs a bot the caller can see
 -- ============================================================
 -- The subquery runs under `public_bots_select`, so a delisted or hidden bot
@@ -242,4 +220,3 @@ CREATE POLICY bot_likes_insert_own ON bot_likes FOR INSERT TO authenticated
 REVOKE ALL ON FUNCTION mark_deleted_hides()   FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION rehide_marked_server() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION refuse_foreign_icon()  FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION take_device_token()    FROM PUBLIC, anon, authenticated;
