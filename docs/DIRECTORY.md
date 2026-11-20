@@ -34,6 +34,15 @@ invite minted on the admin's own server, and central never hears about it.
 the default browse order *is* that number and an `ORDER BY` over a subquery
 cannot use an index.
 
+Servers are ranked the same way (`server_likes`, `public_servers.like_count`).
+They were ordered by `member_count`, which the publishing admin's client
+reports and central cannot check, so a listing could put itself first by
+claiming a large number. `member_count` is still shown, as what the operator
+claims, and orders nothing. Both browsers offer Top (likes) and New (newest
+listing), since a ranking by a count that only grows leaves a new listing
+behind every old one. A like needs a claimed handle and a listing the liker
+can see, and withdrawing a listing drops its likes.
+
 ## Moderating the directory
 
 Everything else here is ciphertext and cannot be moderated, by design. The

@@ -3463,4 +3463,80 @@ BEGIN
   RAISE NOTICE 'ok  a password change is remembered, and only the service key reads it';
 END $$;
 
+
+-- ════════════════════════════════════════════════════════════
+-- Server listings are liked, and ranked by it (019)
+-- ════════════════════════════════════════════════════════════
+RESET ROLE;
+INSERT INTO auth.users (id) VALUES
+  ('cccc0000-0000-4000-8000-000000001901'),
+  ('cccc0000-0000-4000-8000-000000001902'),
+  ('cccc0000-0000-4000-8000-000000001903');
+INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+  ('cccc0000-0000-4000-8000-000000001901', 'likes_owner', 'c', 's'),
+  ('cccc0000-0000-4000-8000-000000001902', 'likes_fan',   'c', 's');
+INSERT INTO public_servers (id, owner_id, supabase_url, server_id, invite_code,
+                            name, member_count, is_listed) VALUES
+  ('dddd0000-0000-4000-8000-000000001901', 'cccc0000-0000-4000-8000-000000001901',
+   'https://likes.example', 'dddd0000-0000-4000-8000-0000000019a1', 'code',
+   'Liked Place', 50000, TRUE),
+  ('dddd0000-0000-4000-8000-000000001902', 'cccc0000-0000-4000-8000-000000001901',
+   'https://likes2.example', 'dddd0000-0000-4000-8000-0000000019a2', 'code',
+   'Unlisted Place', 0, FALSE);
+
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE
+  v_listed   UUID := 'dddd0000-0000-4000-8000-000000001901';
+  v_unlisted UUID := 'dddd0000-0000-4000-8000-000000001902';
+  v_fan      UUID := 'cccc0000-0000-4000-8000-000000001902';
+  v_count    INTEGER;
+BEGIN
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_fan || '","role":"authenticated"}', true);
+
+  -- Naming somebody else still likes as the caller.
+  INSERT INTO server_likes (listing_id, user_id)
+       VALUES (v_listed, 'cccc0000-0000-4000-8000-000000001901');
+  IF NOT EXISTS (SELECT 1 FROM server_likes WHERE listing_id = v_listed AND user_id = v_fan) THEN
+    RAISE EXCEPTION 'FAIL: a like was not the caller''s';
+  END IF;
+  SELECT like_count INTO v_count FROM public_servers WHERE id = v_listed;
+  IF v_count <> 1 THEN RAISE EXCEPTION 'FAIL: a like was counted as %', v_count; END IF;
+
+  BEGIN
+    INSERT INTO server_likes (listing_id, user_id) VALUES (v_listed, v_fan);
+    RAISE EXCEPTION 'FAIL: one account liked a listing twice';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+
+  BEGIN
+    INSERT INTO server_likes (listing_id, user_id) VALUES (v_unlisted, v_fan);
+    RAISE EXCEPTION 'FAIL: a delisted server took a stranger''s like';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  DELETE FROM server_likes WHERE listing_id = v_listed;
+  SELECT like_count INTO v_count FROM public_servers WHERE id = v_listed;
+  IF v_count <> 0 THEN RAISE EXCEPTION 'FAIL: an unlike left the count at %', v_count; END IF;
+
+  -- No handle, no vote.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000001903","role":"authenticated"}', true);
+  BEGIN
+    INSERT INTO server_likes (listing_id, user_id)
+         VALUES (v_listed, 'cccc0000-0000-4000-8000-000000001903');
+    RAISE EXCEPTION 'FAIL: an account with no handle liked a server';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+END $$;
+RESET ROLE;
+
+DO $$
+BEGIN
+  IF has_column_privilege('authenticated', 'public_servers', 'like_count', 'UPDATE') THEN
+    RAISE EXCEPTION 'FAIL: a member may set a listing''s like count';
+  END IF;
+  RAISE NOTICE 'ok  a server like is the caller''s own, once, on a listing they can see, and counted';
+END $$;
+
 ROLLBACK;
