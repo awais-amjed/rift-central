@@ -115,8 +115,18 @@ export function createRelay(config: RelayConfig) {
     return accessToken.value;
   }
 
-  /** Ring one device. Returns false if FCM says the token is dead. */
-  async function ring(token: string, bearer: string): Promise<boolean> {
+  /**
+   * Ring one device. Returns false if FCM says the token is dead.
+   *
+   * [kind] is the one thing the doorbell says: `central` for central's own
+   * DMs, `wake` for a ring a self-hosted server forwarded. A phone answers a
+   * central ring with the session the app left behind, which expires an hour
+   * after Rift was last open, and knowing the ring was central's is what lets
+   * it say "You have a new message" then rather than nothing. It tells Google
+   * which of the two kinds a ping was, and nothing about which server, which
+   * conversation or who.
+   */
+  async function ring(token: string, bearer: string, kind: RingKind): Promise<boolean> {
     const res = await fetch(fcmUrl, {
       method: "POST",
       headers: {
@@ -130,7 +140,7 @@ export function createRelay(config: RelayConfig) {
           // before the app ever saw it, which would mean putting the sender and
           // the message into a payload Google can read — and would leave the
           // notification saying only what the relay was told.
-          data: { kind: "wake" },
+          data: { kind },
           android: { priority: "HIGH" },
         },
       }),
@@ -221,7 +231,8 @@ export function createRelay(config: RelayConfig) {
       if (tokens.length === 0) return Response.json({ rang: 0 });
 
       const bearer = await googleAccessToken();
-      const results = await Promise.all(tokens.map((t) => ring(t, bearer)));
+      const kind: RingKind = relayId ? "wake" : "central";
+      const results = await Promise.all(tokens.map((t) => ring(t, bearer, kind)));
 
       const dead = tokens.filter((_, i) => !results[i]);
       // Only central's own registry is ours to clean. A relayed token lives in
@@ -239,6 +250,9 @@ export function createRelay(config: RelayConfig) {
     }
   };
 }
+
+/** What a doorbell says about itself — see `ring`. */
+type RingKind = "central" | "wake";
 
 /** [req]'s body as text, or null once it passes [limit] bytes. */
 async function readCapped(req: Request, limit: number): Promise<string | null> {
