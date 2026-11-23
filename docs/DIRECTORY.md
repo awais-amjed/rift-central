@@ -12,11 +12,19 @@ exists whether or not its owner has claimed it. The address is compared by
 `server_url_key` (scheme and host, lower-cased, without a default port, a
 trailing dot or a path), since every spelling of one host passes the listing
 proof; compared as typed, `https://a.example.com/` was a fresh listing that a
-moderator's hide or a deleted ban's mark had never seen (fixed Nov 18 2026). So the first account to
-publish one holds the only slot, and a member of any server holds everything
-needed to publish it. `publish_server` is therefore service-role only, behind
-an edge function that redeems a one-time token against the server's own
-domain. Domain control is the one thing central can actually verify.
+moderator's hide or a deleted ban's mark had never seen (fixed Nov 18 2026). There is
+one slot per server, and a member of any server holds everything needed to
+publish it. `publish_server` is therefore service-role only, behind an edge
+function that redeems a one-time token against the server's own domain, which
+the server hands only to its admins. Domain control is the one thing central
+can actually verify.
+
+Since every publish carries that proof, the slot is not the first publisher's
+for good: a publish by another account takes the listing over
+(`publish_server_as`, 021), keeping its id, likes, reports and any hide. Before
+that, a server whose first publisher was demoted, banned or gone had a
+listing none of its admins could edit or take down. The taker needs a free
+slot under the cap, and the old owner's icon does not come with it.
 
 A **bot** listing reserves nothing. It names no database central could ask,
 points at no running thing, and two accounts listing a bot of the same name

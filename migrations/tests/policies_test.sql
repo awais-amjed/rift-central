@@ -3079,12 +3079,28 @@ BEGIN
     RAISE EXCEPTION 'FAIL: republishing under a new spelling did not update the listing';
   END IF;
 
-  -- Somebody else, by yet another spelling: still the first owner's.
+  -- Another account, by yet another spelling. Everything reaching
+  -- publish_server_as carries the server's own proof that an admin asked
+  -- (021), so it takes the listing over: the same row, hide and all, never a
+  -- second one.
+  v_row := publish_server_as(v_gus, 'https://KEY.example.com.', v_srv, 'code', 'Mine now');
+  IF (SELECT count(*) FROM public_servers WHERE server_id = v_srv) <> 1 THEN
+    RAISE EXCEPTION 'FAIL: a takeover made a second listing';
+  END IF;
+  IF v_row.owner_id <> v_gus OR v_row.hidden_at IS NULL THEN
+    RAISE EXCEPTION 'FAIL: a takeover did not move the owner, or undid a hide';
+  END IF;
+
+  -- The old owner's picture does not come with it: it sits in a folder the
+  -- new owner does not control.
+  UPDATE public_servers SET owner_id = v_fay, icon_path = v_fay::text || '/pic.img'
+   WHERE id = v_row.id;
   BEGIN
-    PERFORM publish_server_as(v_gus, 'https://KEY.example.com.', v_srv, 'code', 'Mine now');
-    RAISE EXCEPTION 'FAIL: a new spelling took over another account''s listing';
+    PERFORM publish_server_as(v_gus, 'https://key.example.com', v_srv, 'code', 'Mine now',
+                              NULL, v_fay::text || '/pic.img');
+    RAISE EXCEPTION 'FAIL: a takeover kept the old owner''s picture';
   EXCEPTION WHEN raise_exception THEN
-    IF SQLERRM <> 'listing_owned_by_another_account' THEN RAISE; END IF;
+    IF SQLERRM <> 'icon_not_yours' THEN RAISE; END IF;
   END;
 
   -- A deleted ban's mark holds for every spelling too.
