@@ -159,6 +159,11 @@ CREATE SCHEMA IF NOT EXISTS cron;
 CREATE TABLE IF NOT EXISTS cron.job (
   jobid BIGSERIAL PRIMARY KEY, jobname TEXT UNIQUE, schedule TEXT, command TEXT
 );
+-- And pg_cron's log of runs, with the columns a job here reads.
+CREATE TABLE IF NOT EXISTS cron.job_run_details (
+  runid BIGSERIAL PRIMARY KEY, jobid BIGINT, status TEXT,
+  start_time TIMESTAMPTZ, end_time TIMESTAMPTZ
+);
 CREATE OR REPLACE FUNCTION cron.schedule(p_name TEXT, p_schedule TEXT, p_command TEXT)
   RETURNS BIGINT LANGUAGE sql AS $shim$
   INSERT INTO cron.job (jobname, schedule, command) VALUES (p_name, p_schedule, p_command)

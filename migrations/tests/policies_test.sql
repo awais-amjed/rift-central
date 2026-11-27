@@ -3992,4 +3992,54 @@ BEGIN
 END $$;
 RESET ROLE;
 
+-- ── 026: directory search by index, the job log pruned ──
+RESET ROLE;
+DO $$
+DECLARE
+  v_plan TEXT := '';
+  v_line TEXT;
+  v_q    TEXT;
+BEGIN
+  -- The app's own search, as PostgREST sends it, on both directories. With a
+  -- sequential read ruled out, a plan that still cannot use the trigram
+  -- indexes means the operator class does not match the query.
+  SET LOCAL enable_seqscan = off;
+  FOREACH v_q IN ARRAY ARRAY['public_servers', 'public_bots'] LOOP
+    v_plan := '';
+    FOR v_line IN EXECUTE format(
+      'EXPLAIN SELECT * FROM %I WHERE name ILIKE %L OR description ILIKE %L',
+      v_q, '%speedrun%', '%speedrun%') LOOP
+      v_plan := v_plan || v_line || E'\n';
+    END LOOP;
+    IF v_plan NOT LIKE '%' || v_q || '_name_trgm%'
+       OR v_plan NOT LIKE '%' || v_q || '_description_trgm%' THEN
+      RAISE EXCEPTION 'FAIL: a search of % cannot use its trigram indexes:%', v_q, E'\n' || v_plan;
+    END IF;
+  END LOOP;
+  RESET enable_seqscan;
+  RAISE NOTICE 'ok  a directory search can use the trigram indexes, servers and bots';
+END $$;
+
+DO $$
+DECLARE
+  v_cmd TEXT;
+BEGIN
+  SELECT command INTO v_cmd FROM cron.job WHERE jobname = 'central-job-log-prune';
+  IF v_cmd IS NULL THEN
+    RAISE EXCEPTION 'FAIL: the job log prune is not scheduled';
+  END IF;
+  DELETE FROM cron.job_run_details;
+  INSERT INTO cron.job_run_details (status, start_time, end_time) VALUES
+    ('succeeded', now() - interval '40 days', now() - interval '40 days'),
+    ('succeeded', now() - interval '29 days', now() - interval '29 days'),
+    ('running',   now() - interval '40 days', NULL);
+  EXECUTE v_cmd;
+  IF (SELECT array_agg(status ORDER BY status) FROM cron.job_run_details)
+     IS DISTINCT FROM ARRAY['running', 'succeeded'] THEN
+    RAISE EXCEPTION 'FAIL: the prune kept the wrong runs: %',
+      (SELECT array_agg(status || ' ' || coalesce(end_time::date::text, '-')) FROM cron.job_run_details);
+  END IF;
+  RAISE NOTICE 'ok  the job log loses runs over 30 days old, and keeps one still going';
+END $$;
+
 ROLLBACK;
