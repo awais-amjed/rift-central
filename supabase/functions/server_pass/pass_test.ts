@@ -1,7 +1,7 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
-import { accountTag, normaliseEmail, signPass } from "./pass.ts";
+import { accountTag, normaliseEmail, signPass, tagKey } from "./pass.ts";
 
-const secret = new Uint8Array(32).fill(3);
+const secret = await tagKey(new Uint8Array(32).fill(3));
 const server = "cccc0000-0000-4000-8000-000000000001";
 const url = "https://rift.example";
 

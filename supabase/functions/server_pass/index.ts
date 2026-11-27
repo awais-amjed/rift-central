@@ -1,6 +1,6 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
-import { accountTag, signPass } from "./pass.ts";
+import { accountTag, signPass, tagKey } from "./pass.ts";
 
 // As `publish_server`: the secret key first, the legacy JWT after it.
 const supabase = createClient(
@@ -8,6 +8,30 @@ const supabase = createClient(
   (Deno.env.get("RIFT_SECRET_KEY") ??
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))!,
 );
+
+/**
+ * The two keys, read and imported once per worker rather than on every
+ * request: they change only with a redeploy, which starts new workers. Kept as
+ * the promise, so requests that arrive together share one import. A failed
+ * import is not kept, so the next request tries again.
+ */
+let keys: Promise<{ signing: CryptoKey; tag: CryptoKey }> | null = null;
+function passKeys() {
+  keys ??= (async () => ({
+    signing: await crypto.subtle.importKey(
+      "pkcs8",
+      fromB64(Deno.env.get("SERVER_PASS_SIGNING_KEY")!),
+      "Ed25519",
+      false,
+      ["sign"],
+    ),
+    tag: await tagKey(fromB64(Deno.env.get("SERVER_PASS_TAG_SECRET")!)),
+  }))().catch((err) => {
+    keys = null;
+    throw err;
+  });
+  return keys;
+}
 
 /** How long a pass is good for: one join, started now. */
 const PASS_SECONDS = 300;
@@ -47,20 +71,9 @@ Deno.serve(async (req) => {
     if (!supabaseUrl || !serverId || !publicKey) return fail("missing_fields", 400);
     if (!validFields(supabaseUrl, serverId, publicKey)) return fail("bad_fields", 400);
 
-    const signingKey = await crypto.subtle.importKey(
-      "pkcs8",
-      fromB64(Deno.env.get("SERVER_PASS_SIGNING_KEY")!),
-      "Ed25519",
-      false,
-      ["sign"],
-    );
-    const tag = await accountTag(
-      fromB64(Deno.env.get("SERVER_PASS_TAG_SECRET")!),
-      user.email,
-      supabaseUrl,
-      serverId,
-    );
-    const pass = await signPass(signingKey, {
+    const key = await passKeys();
+    const tag = await accountTag(key.tag, user.email, supabaseUrl, serverId);
+    const pass = await signPass(key.signing, {
       serverId,
       supabaseUrl,
       publicKey,

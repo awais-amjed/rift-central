@@ -41,21 +41,25 @@ const b64url = (bytes: Uint8Array) =>
  * different tags.
  */
 export async function accountTag(
-  secret: Uint8Array<ArrayBuffer>,
+  key: CryptoKey,
   email: string,
   supabaseUrl: string,
   serverId: string,
 ): Promise<string> {
-  const key = await crypto.subtle.importKey(
+  const message = `${normaliseEmail(email)}\n${new URL(supabaseUrl).origin}\n${serverId}`;
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return b64url(new Uint8Array(mac));
+}
+
+/** The key [accountTag] signs with, from `SERVER_PASS_TAG_SECRET`'s bytes. */
+export function tagKey(secret: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
     "raw",
     secret,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
-  const message = `${normaliseEmail(email)}\n${new URL(supabaseUrl).origin}\n${serverId}`;
-  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
-  return b64url(new Uint8Array(mac));
 }
 
 /** The pass for one identity joining one server. */
