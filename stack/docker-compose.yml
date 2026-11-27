@@ -61,7 +61,7 @@ services:
       # settings — and Kong otherwise keeps the old one and answers 502 until
       # it is restarted itself.
       KONG_DNS_VALID_TTL: 5
-      KONG_PLUGINS: request-transformer,cors,key-auth,acl,post-function,rate-limiting
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,pre-function,post-function,rate-limiting
       KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
       KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
 
@@ -299,6 +299,10 @@ services:
       REGION: stub
       GLOBAL_S3_BUCKET: stub
       ENABLE_IMAGE_TRANSFORMATION: "false"
+      # Storage's S3 protocol, on unless told otherwise. Nothing of Rift's
+      # speaks it, and a multipart upload writes its parts to disk before the
+      # per-account ceiling can count them. Kong refuses its path too.
+      S3_PROTOCOL_ENABLED: "false"
     volumes:
       - storage-data:/var/lib/storage
 

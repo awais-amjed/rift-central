@@ -35,6 +35,56 @@ acls:
     group: admin
 
 ###
+### Every request
+###
+### The per-address limits (Auth's GOTRUE_RATE_LIMIT_HEADER, the rate-limiting
+### routes below) count by X-Rift-Client-IP, which Caddy sets to the client's
+### address. An IPv6 host is normally handed a whole /64, 2^64 addresses it can
+### send from, so counting each one alone limits nobody. Here an IPv6 address
+### is cut to its /64 (`2001:db8:1:2::/64`) before anything counts it; an IPv4
+### address, and an IPv4 one written in IPv6 form, count as themselves.
+### pre-function runs ahead of every other plugin, rate-limiting included.
+###
+plugins:
+  - name: pre-function
+    config:
+      access:
+        - |
+            local ip = kong.request.get_header("x-rift-client-ip")
+            if ip == nil or not ip:find(":", 1, true) then return end
+            ip = ip:lower():gsub("%%.*$", "")
+            local v4 = ip:match("^::ffff:(%d+%.%d+%.%d+%.%d+)$")
+            if v4 then
+              kong.service.request.set_header("x-rift-client-ip", v4)
+              return
+            end
+            local function split(s)
+              local t = {}
+              for g in s:gmatch("[^:]+") do t[#t + 1] = g end
+              return t
+            end
+            local groups
+            local left, right = ip:match("^(.-)::(.*)$")
+            if left then
+              local l, r = split(left), split(right)
+              groups = l
+              for _ = 1, 8 - #l - #r do groups[#groups + 1] = "0" end
+              for _, g in ipairs(r) do groups[#groups + 1] = g end
+            else
+              groups = split(ip)
+            end
+            local out = {}
+            for i = 1, 4 do
+              local n = groups[i] and tonumber(groups[i], 16)
+              if #groups ~= 8 or n == nil then
+                -- Not an address this can read: leave it to count alone.
+                return
+              end
+              out[i] = string.format("%x", n)
+            end
+            kong.service.request.set_header("x-rift-client-ip", table.concat(out, ":") .. "::/64")
+
+###
 ### Routes
 ###
 services:
@@ -216,15 +266,24 @@ services:
             - admin
             - anon
 
-  ## No signed links into the two buckets of sealed bytes, made or used. A
-  ## signed link needs no session to open, so one minted for a file in either
-  ## was that file published from this domain for as long as the link said,
-  ## ten years if asked. Nothing of Rift's makes one: the app downloads DM
-  ## files and backups with its session, and the admin dashboard signs only
-  ## directory icons and bug reports. The prefix covers both minting
-  ## (POST /object/sign/<bucket>[/<path>]) and opening (GET with ?token=).
+  ## Ways into Storage that nothing of Rift's uses, refused.
+  ##
+  ## Signed links into the buckets people upload to. A signed link needs no
+  ## session to open, so one minted for a file in any of them was that file
+  ## published from this domain for as long as the link said, ten years if
+  ## asked, whatever bytes it held. The app downloads DM files and backups
+  ## with its session, and the admin dashboard reads bug reports with the
+  ## moderator's session; it signs only directory icons. The prefix covers
+  ## both minting (POST /object/sign/<bucket>[/<path>]) and opening (GET with
+  ## ?token=).
+  ##
+  ## Resumable (tus) uploads and Storage's S3 protocol. Both write a file's
+  ## bytes to disk before any storage.objects row exists, so the per-account
+  ## ceiling (refuse_over_account_ceiling) never sees an upload left
+  ## unfinished, and nothing in Storage ever clears one away. The app uploads
+  ## to central in one request; it uses tus only with self-hosted servers.
   - name: storage-v1-sign-sealed
-    _comment: "Storage: signed links into backups and DM attachments (refused)"
+    _comment: "Storage: signed links into uploaded buckets, tus and S3 (refused)"
     url: http://localhost:1
     routes:
       - name: storage-v1-sign-sealed
@@ -232,6 +291,9 @@ services:
         paths:
           - /storage/v1/object/sign/backups
           - /storage/v1/object/sign/central-dm-attachments
+          - /storage/v1/object/sign/bug-reports
+          - /storage/v1/upload/resumable
+          - /storage/v1/s3
         plugins:
           - name: post-function
             config:
@@ -302,6 +364,28 @@ services:
         config:
           minute: 20
           hour: 200
+          policy: local
+          limit_by: header
+          header_name: X-Rift-Client-IP
+
+  ## `publish_server` on a route of its own, for the same reason: each call
+  ## makes central resolve a name and open a connection to wherever the
+  ## caller points it, and listing a server is something an admin does a few
+  ## times, not a hundred.
+  - name: functions-v1-publish-server
+    _comment: "Edge Functions: /functions/v1/publish_server -> http://functions:9000/publish_server"
+    url: http://functions:9000/publish_server
+    routes:
+      - name: functions-v1-publish-server
+        strip_path: true
+        paths:
+          - /functions/v1/publish_server
+    plugins:
+      - name: cors
+      - name: rate-limiting
+        config:
+          minute: 5
+          hour: 30
           policy: local
           limit_by: header
           header_name: X-Rift-Client-IP

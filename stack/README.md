@@ -65,14 +65,23 @@ reads the tenant from the database, and the health check asks Realtime directly.
 local stack: every spelling of the path (`//tenants`, `%74enants`,
 `x/../tenants`) gets 403.
 
-**Kong refuses signed links into `backups` and `central-dm-attachments`**,
-minting one or opening one. A signed link needs no session, so a member could
-turn any file they may read into a public download from the API's domain, for
-as long as they asked. Nothing of Rift's uses one there: the app downloads
-with its session, and the admin dashboard signs only directory icons and bug
-reports, which stay open to it. Each bucket also takes only the file type Rift
-uploads to it (`allowed_mime_types`). Verified Nov 18 2026 on a local stack:
-both sign routes 403, an SVG refused by every bucket, an icon still signed.
+**Kong refuses signed links into `backups`, `central-dm-attachments` and
+`bug-reports`**, minting one or opening one. A signed link needs no session, so a
+member could turn any file they may read, their own uploads included, into a
+public download from the API's domain, for as long as they asked. Nothing of
+Rift's uses one there: the app downloads with its session, and so does the admin
+dashboard for bug reports; it signs only directory icons, which stay open to it.
+Each bucket also takes only the file type Rift uploads to it
+(`allowed_mime_types`). Verified Nov 18 2026 on a local stack: both sign routes
+403, an SVG refused by every bucket, an icon still signed; the bug-report route
+Nov 27.
+
+**Kong refuses resumable (tus) uploads and Storage's S3 protocol**, and Storage
+has S3 switched off (`S3_PROTOCOL_ENABLED`). Both write a file's bytes to disk
+before any `storage.objects` row exists, so the per-account ceiling never sees an
+upload left unfinished, and nothing in Storage clears one away: a member could
+fill the disk. The app uploads to central in one request. Verified Nov 27 2026 on
+a local stack: a plain upload works, a tus upload and the S3 path get 403.
 
 **Another site on the same machine** goes through this Caddy, since it holds
 80 and 443. Each one is a file in `volumes/caddy/sites/` (`<name>.caddy`, a
@@ -115,7 +124,7 @@ docker exec central-db psql -U postgres -c \
 | Here | Not here |
 |---|---|
 | TLS (Caddy, Let's Encrypt) | Monitoring and alerts (beyond the backup heartbeat); `monitor/` is the one joinrift.app runs, from Cloudflare |
-| Per-address limits on signing in, verifying and refreshing — Caddy hands Auth each client's address, IPv6 included | |
+| Per-address limits on signing in, verifying and refreshing, and on `server_pass` and `publish_server` — Caddy hands on each client's address, and Kong counts an IPv6 one by its /64 (verified Nov 27 2026 on a local stack) | |
 | Email with Rift's templates, over your SMTP | Studio (Supabase's dashboard) — `psql` in the db container instead |
 | Push, the nightly sweep, publishing servers | |
 | The second-factor lockout for moderators | |

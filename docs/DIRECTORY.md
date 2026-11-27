@@ -17,7 +17,8 @@ one slot per server, and a member of any server holds everything needed to
 publish it. `publish_server` is therefore service-role only, behind an edge
 function that redeems a one-time token against the server's own domain, which
 the server hands only to its admins. Domain control is the one thing central
-can actually verify.
+can actually verify. Each call has central look up and connect to an address the
+caller chose, so Kong lets an address make five a minute and thirty an hour.
 
 Since every publish carries that proof, the slot is not the first publisher's
 for good: a publish by another account takes the listing over
