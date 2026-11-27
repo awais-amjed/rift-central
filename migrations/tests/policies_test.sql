@@ -3878,4 +3878,68 @@ BEGIN
   RAISE NOTICE 'ok  every foreign key has an index';
 END $$;
 
+-- ============================================================
+-- The app-speed half of the Nov 27 review (024)
+-- ============================================================
+-- A graph ring names the acting session on the actor's own topic, and
+-- nothing on anybody else's. Asked as the owner, as the triggers ask it.
+RESET ROLE;
+DO $$
+DECLARE
+  v_me   CONSTANT UUID := 'cccc0000-0000-4000-8000-000000002301';
+  v_peer CONSTANT UUID := 'cccc0000-0000-4000-8000-000000002002';
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"' || v_me || '","role":"authenticated","session_id":"5e5510e0-0000-4000-8000-000000000001"}', true);
+  IF graph_ring(v_me) <> '{"session":"5e5510e0-0000-4000-8000-000000000001"}'::jsonb THEN
+    RAISE EXCEPTION 'FAIL: the actor''s ring does not name its session: %', graph_ring(v_me);
+  END IF;
+  IF graph_ring(v_peer) <> '{}'::jsonb THEN
+    RAISE EXCEPTION 'FAIL: the other side''s ring names the actor''s session';
+  END IF;
+  PERFORM set_config('request.jwt.claims', '{"sub":"' || v_me || '","role":"authenticated"}', true);
+  IF graph_ring(v_me) <> '{}'::jsonb THEN
+    RAISE EXCEPTION 'FAIL: a ring with no session behind it names one';
+  END IF;
+  RAISE NOTICE 'ok  a graph ring names the acting session on its own topic only';
+END $$;
+
+-- graph_ring is for the triggers alone.
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+  PERFORM graph_ring('cccc0000-0000-4000-8000-000000002002');
+  RAISE EXCEPTION 'FAIL: authenticated can call graph_ring';
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'ok  graph_ring is not callable by a session';
+END $$;
+
+-- friend_counts in one pass answers what the three passes did, for everyone.
+DO $$
+DECLARE
+  v_who  UUID;
+  v_want JSONB;
+BEGIN
+  FOR v_who IN SELECT id FROM t023_users LOOP
+    PERFORM set_config('request.jwt.claims',
+      '{"sub":"' || v_who || '","role":"authenticated"}', true);
+    SELECT jsonb_build_object(
+      'friends',  (SELECT count(*) FROM friendships f
+                    WHERE v_who IN (f.low_id, f.high_id) AND f.status = 'accepted'),
+      'incoming', (SELECT count(*) FROM friendships f
+                    WHERE v_who IN (f.low_id, f.high_id)
+                      AND f.status = 'pending' AND f.requester_id <> v_who),
+      'outgoing', (SELECT count(*) FROM friendships f
+                    WHERE v_who IN (f.low_id, f.high_id)
+                      AND f.status = 'pending' AND f.requester_id = v_who),
+      'blocked',  (SELECT count(*) FROM blocks b WHERE b.blocker_id = v_who))
+      INTO v_want;
+    IF friend_counts() IS DISTINCT FROM v_want THEN
+      RAISE EXCEPTION 'FAIL: friend_counts for % is %, the three passes say %',
+        v_who, friend_counts(), v_want;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'ok  friend_counts in one pass agrees for every account';
+END $$;
+
 ROLLBACK;
