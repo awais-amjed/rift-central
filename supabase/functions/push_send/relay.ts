@@ -60,7 +60,7 @@ function b64url(bytes: Uint8Array | string): string {
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function pemToPkcs8(pem: string): Uint8Array {
+function pemToPkcs8(pem: string): Uint8Array<ArrayBuffer> {
   const body = pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, "");
   return Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
 }
@@ -133,6 +133,21 @@ export function createRelay(config: RelayConfig) {
     });
   }
 
+  /**
+   * Google refused [value]: forget it here and in the database, so neither
+   * this worker nor the next hands it out again. Only if it is still the one
+   * held, or a newer token kept meanwhile would go with it.
+   */
+  async function dropToken(value: string): Promise<void> {
+    if (accessToken?.value === value) accessToken = null;
+    await fetch(`${rest}/rpc/forget_push_access_token`, {
+      method: "POST",
+      signal: deadline(),
+      headers: dbHeaders,
+      body: JSON.stringify({ p_value: value }),
+    }).catch(() => {});
+  }
+
   /** Google's service-account flow: a self-signed JWT traded for an access token. */
   async function mintAccessToken(): Promise<{ value: string; expiresAt: number }> {
     const now = Math.floor(Date.now() / 1000);
@@ -188,22 +203,29 @@ export function createRelay(config: RelayConfig) {
    * which of the two kinds a ping was, and nothing about which server, which
    * conversation or who.
    */
-  async function ring(token: string, bearer: string, kind: RingKind): Promise<boolean> {
+  async function ring(token: string, bearer: string, kind: RingKind): Promise<Rung> {
     let res: Response;
     try {
       res = await send(token, bearer, kind);
     } catch {
       // Timed out or never connected: not the token's fault either, and one
       // slow ring must not fail the others beside it.
-      return true;
+      return "rang";
     }
-    if (res.ok) return true;
+    if (res.ok) return "rang";
 
     const body = await res.text().catch(() => "");
-    // Uninstalled, or the token was replaced. Anything else — a network blip, a
-    // quota — is not the token's fault and must not delete it.
-    return !(res.status === 404 || body.includes("UNREGISTERED") ||
-      body.includes("INVALID_ARGUMENT"));
+    // Uninstalled, or the token was replaced.
+    if (res.status === 404 || body.includes("UNREGISTERED") || body.includes("INVALID_ARGUMENT")) {
+      return "dead";
+    }
+    // Google refused the access token, not the device: a 401, or a 403 that
+    // is not a device registered to another project.
+    if (res.status === 401 || (res.status === 403 && !body.includes("SENDER_ID_MISMATCH"))) {
+      return "refused";
+    }
+    // Anything else — a network blip, a quota — is nobody's fault to act on.
+    return "rang";
   }
 
   function send(token: string, bearer: string, kind: RingKind): Promise<Response> {
@@ -310,7 +332,22 @@ export function createRelay(config: RelayConfig) {
       const kind: RingKind = relayId ? "wake" : "central";
       const results = await Promise.all(tokens.map((t) => ring(t, bearer, kind)));
 
-      const dead = tokens.filter((_, i) => !results[i]);
+      // Refused, the token goes, and the rings it carried go again once with a
+      // new one. Kept, it would be handed out to every worker until it expired.
+      const refused = results.flatMap((r, i) => (r === "refused" ? [i] : []));
+      if (refused.length > 0) {
+        await dropToken(bearer);
+        try {
+          const fresh = await googleAccessToken();
+          const again = await Promise.all(refused.map((i) => ring(tokens[i], fresh, kind)));
+          refused.forEach((i, j) => (results[i] = again[j]));
+          if (again.includes("refused")) await dropToken(fresh);
+        } catch (err) {
+          console.error("[push_send] minting after a refusal", err);
+        }
+      }
+
+      const dead = tokens.filter((_, i) => results[i] === "dead");
       // Only central's own registry is ours to clean. A relayed token lives in
       // a database we have no credentials for, and the dead ones there are
       // swept on staleness instead — reporting
@@ -318,7 +355,7 @@ export function createRelay(config: RelayConfig) {
       if (dead.length > 0 && !relayId) await forget(dead);
 
       return Response.json({
-        rang: tokens.length - dead.length,
+        rang: results.filter((r) => r === "rang").length,
         pruned: dead.length,
       });
     } catch (err) {
@@ -333,6 +370,12 @@ export function createRelay(config: RelayConfig) {
 
 /** What a doorbell says about itself — see `ring`. */
 type RingKind = "central" | "wake";
+
+/**
+ * How one ring went: out (or failed for nobody's fault), to a device that is
+ * gone, or refused because of the access token rather than the device.
+ */
+type Rung = "rang" | "dead" | "refused";
 
 /** [req]'s body as text, or null once it passes [limit] bytes. */
 async function readCapped(req: Request, limit: number): Promise<string | null> {

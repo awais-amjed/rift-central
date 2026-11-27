@@ -4042,4 +4042,57 @@ BEGIN
   RAISE NOTICE 'ok  the job log loses runs over 30 days old, and keeps one still going';
 END $$;
 
+
+-- ── 027: the hold's delete narrowed, a refused push token forgotten ──
+RESET ROLE;
+DO $$
+DECLARE
+  v_eve UUID := 'cccc0000-0000-4000-8000-000000002701';
+  v_fay UUID := 'cccc0000-0000-4000-8000-000000002702';
+BEGIN
+  IF has_function_privilege('authenticated', 'forget_push_access_token(text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'forget_push_access_token(text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'forget_push_access_token(text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: forgetting the push token is not the service role''s alone';
+  END IF;
+
+  -- The check before the write still clears what it lets through: a hold
+  -- that has run out, and one the claimer takes back.
+  INSERT INTO auth.users (id) VALUES (v_eve), (v_fay);
+  INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+    (v_eve, 'race_eve', 'c', 's'), (v_fay, 'race_fay', 'c', 's');
+  INSERT INTO released_handles (handle, previous_owner, released_at) VALUES
+    ('race_old', v_fay, now() - interval '31 days');
+  UPDATE users SET handle = 'race_old' WHERE id = v_eve;
+  IF EXISTS (SELECT 1 FROM released_handles WHERE handle = 'race_old') THEN
+    RAISE EXCEPTION 'FAIL: taking a handle whose hold ran out left the hold';
+  END IF;
+  UPDATE users SET handle = 'race_fay2' WHERE id = v_fay;
+  UPDATE users SET handle = 'race_fay' WHERE id = v_fay;
+  IF EXISTS (SELECT 1 FROM released_handles WHERE handle = 'race_fay') THEN
+    RAISE EXCEPTION 'FAIL: a handle taken back by its owner left its hold';
+  END IF;
+  RAISE NOTICE 'ok  only the service role forgets the push token; a hold run out or taken back still goes';
+END $$;
+
+SET LOCAL ROLE service_role;
+DO $$
+BEGIN
+  PERFORM keep_push_access_token('t-refused', now() + interval '58 minutes');
+  PERFORM forget_push_access_token('t-some-other');
+  IF push_access_token() ->> 'value' IS DISTINCT FROM 't-refused' THEN
+    RAISE EXCEPTION 'FAIL: forgetting one token took another';
+  END IF;
+  PERFORM forget_push_access_token('t-refused');
+  IF push_access_token() IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: a refused token was still handed out';
+  END IF;
+  PERFORM keep_push_access_token('t-next', now() + interval '50 minutes');
+  IF push_access_token() ->> 'value' IS DISTINCT FROM 't-next' THEN
+    RAISE EXCEPTION 'FAIL: no token could be kept after one was forgotten';
+  END IF;
+  RAISE NOTICE 'ok  a refused push token is forgotten, and only that one';
+END $$;
+RESET ROLE;
+
 ROLLBACK;

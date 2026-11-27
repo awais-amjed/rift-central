@@ -50,7 +50,12 @@ Google's access token, good for an hour, is kept in central's database
 whichever worker or host rings next uses it instead of signing and exchanging
 a new one. A host whose workers are short-lived, as Supabase's are at a minute,
 would otherwise call Google before almost every ring. If the database cannot
-be reached, the relay mints its own and rings anyway.
+be reached, the relay mints its own and rings anyway. A token Google refuses
+(a 401, or a 403 that is not a device on another project) is forgotten there
+and in the database (`forget_push_access_token`), and the rings it carried go
+once more on a new one, so swapping the service account takes effect at the
+next ring rather than when the old token expires. Verified Nov 27 with fakes
+of Google and the database (`push_send/relay_test.ts`).
 
 ### Running it on Node
 

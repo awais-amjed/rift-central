@@ -34,6 +34,12 @@ interface World {
   bearers: string[];
   kept: { value: string; expiresAt: number } | null;
   dbDown: boolean;
+  /** Bearers Google answers 401 for. */
+  refused?: Set<string>;
+  /** Devices registered to another Firebase project: 403 SENDER_ID_MISMATCH. */
+  otherProject?: Set<string>;
+  /** The recipient's devices; one, "device-1", if unset. */
+  devices?: string[];
 }
 
 function fakeFetch(world: World): typeof fetch {
@@ -48,11 +54,32 @@ function fakeFetch(world: World): typeof fetch {
       return json({ access_token: `google-${world.minted}`, expires_in: 3599 });
     }
     if (url.includes("fcm.googleapis.com")) {
-      world.bearers.push(new Headers(init?.headers).get("Authorization") ?? "");
+      const bearer = new Headers(init?.headers).get("Authorization") ?? "";
+      world.bearers.push(bearer);
+      if (world.refused?.has(bearer.replace("Bearer ", ""))) {
+        return json({ error: { status: "UNAUTHENTICATED" } }, 401);
+      }
+      const device = JSON.parse(String(init?.body)).message?.token;
+      if (world.otherProject?.has(device)) {
+        return json({
+          error: {
+            status: "PERMISSION_DENIED",
+            details: [{ errorCode: "SENDER_ID_MISMATCH" }],
+          },
+        }, 403);
+      }
       return json({ name: "sent" });
     }
     if (url.includes("/rest/v1/device_tokens")) {
-      return json([{ token: "device-1" }]);
+      return json(
+        world.devices?.map((token) => ({ token })) ?? [{ token: "device-1" }],
+      );
+    }
+    if (url.endsWith("/rpc/forget_push_access_token")) {
+      if (world.dbDown) return json({ message: "down" }, 503);
+      const { p_value } = JSON.parse(String(init?.body));
+      if (world.kept?.value === p_value) world.kept = null;
+      return new Response(null, { status: 204 });
     }
     if (url.endsWith("/rpc/push_access_token")) {
       if (world.dbDown) return json({ message: "down" }, 503);
@@ -157,4 +184,58 @@ Deno.test("with the database's token unreachable, a ring still goes out", async 
     assertEquals((await ringFor(relay)).rang, 1);
   });
   assertEquals(world.minted, 1);
+});
+
+Deno.test("a kept token Google refuses is forgotten, and the ring goes out on a new one", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const world: World = {
+    minted: 0,
+    bearers: [],
+    kept: { value: "old-project", expiresAt: now + 3000 },
+    dbDown: false,
+    refused: new Set(["old-project"]),
+  };
+  await withWorld(world, async () => {
+    const answer = await ringFor(await worker());
+    assertEquals([answer.rang, answer.pruned], [1, 0]);
+  });
+  assertEquals(world.minted, 1);
+  assertEquals(world.bearers, ["Bearer old-project", "Bearer google-1"]);
+  // And the next worker finds the new one, not the refused one.
+  assertEquals(world.kept?.value, "google-1");
+});
+
+Deno.test("a device on another project is not the token's fault", async () => {
+  const world: World = {
+    minted: 0,
+    bearers: [],
+    kept: null,
+    dbDown: false,
+    devices: ["device-1", "device-2"],
+    otherProject: new Set(["device-2"]),
+  };
+  await withWorld(world, async () => {
+    const answer = await ringFor(await worker());
+    assertEquals([answer.rang, answer.pruned], [2, 0]);
+  });
+  assertEquals(world.minted, 1);
+  assertEquals(world.kept?.value, "google-1");
+});
+
+Deno.test("refused again with the new token, the ring stops there and says so", async () => {
+  const world: World = {
+    minted: 0,
+    bearers: [],
+    kept: null,
+    dbDown: false,
+    refused: new Set(["google-1", "google-2"]),
+  };
+  await withWorld(world, async () => {
+    const answer = await ringFor(await worker());
+    assertEquals([answer.rang, answer.pruned], [0, 0]);
+  });
+  assertEquals(world.minted, 2);
+  assertEquals(world.bearers.length, 2);
+  // Neither refused token is left for the next worker.
+  assertEquals(world.kept, null);
 });
