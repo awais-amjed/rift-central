@@ -2717,6 +2717,60 @@ BEGIN
   RAISE NOTICE 'ok  a deleted bug report still counts against the sender''s day';
 END $$;
 
+-- Several at once: a member cannot, a moderator can, all in one call, and
+-- each still counts against its sender's day.
+DO $$
+BEGIN
+  BEGIN
+    PERFORM moderation_delete_bug_reports(ARRAY['cccc0000-0000-4000-8000-00000000ffff']::uuid[]);
+    RAISE EXCEPTION 'FAIL: a member deleted bug reports';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+END $$;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
+DO $$
+DECLARE
+  v_ids  UUID[];
+  v_gone INTEGER;
+BEGIN
+  SELECT array_agg((r ->> 'id')::uuid) INTO v_ids
+    FROM jsonb_array_elements(moderation_bug_reports()) r
+   WHERE r ->> 'description' IN ('again 3', 'again 4');
+  v_gone := moderation_delete_bug_reports(v_ids || 'cccc0000-0000-4000-8000-00000000ffff'::uuid);
+  IF v_gone <> 2 OR jsonb_array_length(moderation_bug_reports()) <> 7 THEN
+    RAISE EXCEPTION 'FAIL: deleting two reports at once took % and left %',
+      v_gone, jsonb_array_length(moderation_bug_reports());
+  END IF;
+  BEGIN
+    PERFORM moderation_delete_bug_reports(ARRAY[]::uuid[]);
+    RAISE EXCEPTION 'FAIL: an empty delete passed silently';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'no_bug_reports_given' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM moderation_delete_bug_reports(
+      ARRAY(SELECT gen_random_uuid() FROM generate_series(1, 501)));
+    RAISE EXCEPTION 'FAIL: a delete took more than the limit';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'too_many_bug_reports' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a moderator deletes several bug reports in one call, and only a moderator';
+END $$;
+RESET ROLE;
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM bug_report_deletions
+       WHERE reporter_id = 'cccc0000-0000-4000-8000-000000000002') <> 3 THEN
+    RAISE EXCEPTION 'FAIL: deleted reports were not all counted for their sender';
+  END IF;
+  RAISE NOTICE 'ok  reports deleted together each still count against the sender''s day';
+END $$;
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+
 -- Retention: a report past 90 days goes, and its files are then the sweep's.
 RESET ROLE;
 DO $$
