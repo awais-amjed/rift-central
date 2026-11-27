@@ -45,6 +45,13 @@ All four read the same configuration: `SUPABASE_URL`,
 `RIFT_SECRET_KEY` (or the legacy `SUPABASE_SERVICE_ROLE_KEY`), `PUSH_SECRET`,
 `FCM_SERVICE_ACCOUNT`.
 
+Google's access token, good for an hour, is kept in central's database
+(`push_access_token`, `keep_push_access_token`, the service role's alone), so
+whichever worker or host rings next uses it instead of signing and exchanging
+a new one. A host whose workers are short-lived, as Supabase's are at a minute,
+would otherwise call Google before almost every ring. If the database cannot
+be reached, the relay mints its own and rings anyway.
+
 ### Running it on Node
 
 ```

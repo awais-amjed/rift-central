@@ -3942,4 +3942,54 @@ BEGIN
   RAISE NOTICE 'ok  friend_counts in one pass agrees for every account';
 END $$;
 
+-- ── 025: the push relay's shared Google token ──
+RESET ROLE;
+DO $$
+BEGIN
+  IF has_function_privilege('authenticated', 'push_access_token()', 'EXECUTE')
+     OR has_function_privilege('anon', 'push_access_token()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'keep_push_access_token(text, timestamptz)', 'EXECUTE')
+     OR has_function_privilege('anon', 'keep_push_access_token(text, timestamptz)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: a session can reach the push relay''s Google token';
+  END IF;
+  IF has_schema_privilege('service_role', 'push_private', 'USAGE')
+     OR has_schema_privilege('authenticated', 'push_private', 'USAGE') THEN
+    RAISE EXCEPTION 'FAIL: the token''s schema is reachable other than through its functions';
+  END IF;
+  RAISE NOTICE 'ok  only the service role reaches the push token, and only through its functions';
+END $$;
+
+SET LOCAL ROLE service_role;
+DO $$
+BEGIN
+  IF push_access_token() IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: a token before any was kept';
+  END IF;
+  PERFORM keep_push_access_token('t-later', now() + interval '50 minutes');
+  PERFORM keep_push_access_token('t-older', now() + interval '40 minutes');
+  IF push_access_token() ->> 'value' IS DISTINCT FROM 't-later' THEN
+    RAISE EXCEPTION 'FAIL: an older token replaced a newer one: %', push_access_token();
+  END IF;
+  PERFORM keep_push_access_token('t-newest', now() + interval '59 minutes');
+  IF abs((push_access_token() ->> 'expires_at')::numeric
+         - extract(epoch FROM now() + interval '59 minutes')) > 1 THEN
+    RAISE EXCEPTION 'FAIL: the push token comes back with the wrong expiry';
+  END IF;
+  IF push_access_token() ->> 'value' IS DISTINCT FROM 't-newest' THEN
+    RAISE EXCEPTION 'FAIL: a newer token did not replace the old one';
+  END IF;
+  RAISE NOTICE 'ok  the push token keeps whichever lasts longer';
+END $$;
+RESET ROLE;
+UPDATE push_private.access_token SET expires_at = now() + interval '30 seconds';
+SET LOCAL ROLE service_role;
+DO $$
+BEGIN
+  IF push_access_token() IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: a token with under a minute left is handed out';
+  END IF;
+  RAISE NOTICE 'ok  a push token about to expire is not handed out';
+END $$;
+RESET ROLE;
+
 ROLLBACK;

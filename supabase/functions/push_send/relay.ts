@@ -75,14 +75,67 @@ export function createRelay(config: RelayConfig) {
     "Content-Type": "application/json",
   };
 
-  /** Cached until shortly before it expires — one mint per hour, not per push. */
+  /** This worker's copy of Google's access token, until a minute before it expires. */
   let accessToken: { value: string; expiresAt: number } | null = null;
+  /** A mint under way, which the rings that arrive meanwhile wait for. */
+  let minting: Promise<string> | null = null;
 
-  /** Google's service-account flow: a self-signed JWT traded for an access token. */
+  /**
+   * Google's access token: this worker's copy, else the one another worker
+   * kept in the database, else a new one. The host retires a worker a minute
+   * after it starts (the functions' router), so a copy in memory alone
+   * meant minting before almost every ring, not once an hour. The database
+   * half is a saving and nothing more: if it fails, the ring mints its own.
+   */
   async function googleAccessToken(): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
     if (accessToken && accessToken.expiresAt > now + 60) return accessToken.value;
+    minting ??= sharedOrMinted().finally(() => (minting = null));
+    return await minting;
+  }
 
+  async function sharedOrMinted(): Promise<string> {
+    const kept = await keptToken().catch(() => null);
+    if (kept) {
+      accessToken = kept;
+      return kept.value;
+    }
+    const minted = await mintAccessToken();
+    accessToken = minted;
+    await keepToken(minted).catch(() => {});
+    return minted.value;
+  }
+
+  async function keptToken(): Promise<{ value: string; expiresAt: number } | null> {
+    const res = await fetch(`${rest}/rpc/push_access_token`, {
+      method: "POST",
+      signal: deadline(),
+      headers: dbHeaders,
+      body: "{}",
+    });
+    if (!res.ok) return null;
+    const kept = await res.json();
+    return typeof kept?.value === "string" && kept.value &&
+        typeof kept.expires_at === "number"
+      ? { value: kept.value, expiresAt: kept.expires_at }
+      : null;
+  }
+
+  async function keepToken(token: { value: string; expiresAt: number }): Promise<void> {
+    await fetch(`${rest}/rpc/keep_push_access_token`, {
+      method: "POST",
+      signal: deadline(),
+      headers: dbHeaders,
+      body: JSON.stringify({
+        p_value: token.value,
+        p_expires_at: new Date(token.expiresAt * 1000).toISOString(),
+      }),
+    });
+  }
+
+  /** Google's service-account flow: a self-signed JWT traded for an access token. */
+  async function mintAccessToken(): Promise<{ value: string; expiresAt: number }> {
+    const now = Math.floor(Date.now() / 1000);
     const claims = {
       iss: config.serviceAccount.client_email,
       scope: "https://www.googleapis.com/auth/firebase.messaging",
@@ -121,8 +174,7 @@ export function createRelay(config: RelayConfig) {
     if (!res.ok) throw new Error(`token exchange failed: ${await res.text()}`);
 
     const json = await res.json();
-    accessToken = { value: json.access_token, expiresAt: now + json.expires_in };
-    return accessToken.value;
+    return { value: json.access_token, expiresAt: now + json.expires_in };
   }
 
   /**
