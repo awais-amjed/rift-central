@@ -6,22 +6,14 @@ const JWT_SECRET = Deno.env.get('JWT_SECRET')
 const SUPABASE_JWKS = parseJwks(Deno.env.get('SUPABASE_JWKS'))
 const VERIFY_JWT = Deno.env.get('VERIFY_JWT') === 'true'
 
-// Each function is handed the secrets it reads and no others. They all sat in
-// every worker once, so `publish_server`, which fetches an address a stranger
-// chose, ran holding the pass-signing key and the FCM account. A function not
-// named here gets none; a new secret goes in SECRETS and beside each function
-// that reads it.
-const SECRETS = new Set([
-  'RIFT_SECRET_KEY',
-  'SUPABASE_SERVICE_ROLE_KEY',
-  'PUSH_SECRET',
-  'FCM_SERVICE_ACCOUNT',
-  'ATTACHMENT_SWEEP_SECRET',
-  'SERVER_PASS_SIGNING_KEY',
-  'SERVER_PASS_TAG_SECRET',
-  'JWT_SECRET',
-  'SUPABASE_JWKS',
-])
+// Each function is handed the names it reads and nothing else. Every secret
+// sat in every worker once, so `publish_server`, which fetches an address a
+// stranger chose, ran holding the pass-signing key and the FCM account. Then
+// a list of secrets was held back, which handed any variable it did not name
+// to every function. Now it is the other way round: what every function gets
+// is SHARED, a secret goes to the functions named beside it, and a variable
+// added to the container reaches no function until it is named here.
+const SHARED = ['SUPABASE_URL', 'HOME', 'PATH']
 const SERVICE_KEY = ['RIFT_SECRET_KEY', 'SUPABASE_SERVICE_ROLE_KEY']
 const SECRETS_BY_FUNCTION: Record<string, string[]> = {
   delete_account: SERVICE_KEY,
@@ -176,8 +168,8 @@ Deno.serve(async (req: Request) => {
   const importMapPath = null
   const envVarsObj = Deno.env.toObject()
   const allowed = Object.hasOwn(SECRETS_BY_FUNCTION, service_name) ? SECRETS_BY_FUNCTION[service_name] : []
-  const envVars = Object.keys(envVarsObj)
-    .filter((k) => !SECRETS.has(k) || allowed.includes(k))
+  const envVars = [...SHARED, ...allowed]
+    .filter((k) => Object.hasOwn(envVarsObj, k))
     .map((k) => [k, envVarsObj[k]])
 
   try {

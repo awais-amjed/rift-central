@@ -233,3 +233,36 @@ Deno.test("a server that never answers is given up on", async () => {
   });
   assertEquals(result, { ok: false, reason: "unreachable" });
 });
+
+// ── The Nov 27 review ───────────────────────────────────────
+
+Deno.test("IPv6 ranges are matched by number, not by the text's start", () => {
+  for (const address of ["febf::1", "fe90::1", "fec0::1", "fdff::1", "ff05::2"]) {
+    assert(isBlockedAddress(address), `${address} should be blocked`);
+  }
+  // 0fc1:: and 0fe8:: are public, whatever their first letters.
+  for (const address of ["fc1::1", "fe8::1", "2001:db8::1"]) {
+    assertEquals(isBlockedAddress(address), false, `${address} should be allowed`);
+  }
+});
+
+Deno.test("a resolver that never answers is cut off by the deadline", async () => {
+  const started = Date.now();
+  const result = await safePost("https://chat.example.com", "/x", {}, {
+    resolve: () => new Promise<string[]>(() => {}),
+    timeoutMs: 100,
+  });
+  assertEquals(result, { ok: false, reason: "unreachable" });
+  assert(Date.now() - started < 2000, "the lookup waited past the deadline");
+});
+
+Deno.test("a chunked reply that never frames a chunk is not read forever", async () => {
+  const conn = fakeConn(["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz"], 4096);
+  const result = await safePost("https://chat.example.com", "/x", {}, {
+    resolve: () => Promise.resolve(["93.184.216.34"]),
+    connect: () => Promise.resolve(conn),
+    timeoutMs: 5000,
+  });
+  assertEquals(result, { ok: false, reason: "unreachable" });
+  assert(conn.reads() < 100, `read ${conn.reads()} times`);
+});

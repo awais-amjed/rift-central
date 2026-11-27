@@ -246,7 +246,11 @@ export function createRelay(config: RelayConfig) {
         pruned: dead.length,
       });
     } catch (err) {
-      return new Response(`error: ${err}`, { status: 500 });
+      // The detail stays in the log: it can carry what PostgREST or Google
+      // answered, and the caller (any self-hosted relay) needs only to know
+      // that this ring failed.
+      console.error("[push_send]", err);
+      return new Response("error", { status: 500 });
     }
   };
 }

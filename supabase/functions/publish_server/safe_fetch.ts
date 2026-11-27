@@ -49,6 +49,12 @@ const MAX_BYTES = 16 * 1024;
 /** The status line and headers, which come before the body. */
 const MAX_HEAD_BYTES = 8 * 1024;
 
+/**
+ * The most read from the socket in all, head and framing included: enough for
+ * the head and a body of [MAX_BYTES] cut into small chunks.
+ */
+const MAX_READ_BYTES = MAX_HEAD_BYTES + 8 * MAX_BYTES;
+
 /** A byte stream to the address that was checked, speaking TLS for [hostname]. */
 export interface Conn {
   readonly readable: ReadableStream<Uint8Array>;
@@ -94,12 +100,19 @@ function isBlockedIPv6(address: string): boolean {
   const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return isBlockedIPv4(mapped[1]);
 
+  if (lower === "::" || lower === "::1") return true; // unspecified, loopback
+
+  // The ranges by their first 16 bits, as numbers: a prefix of the text is
+  // not a prefix of the address (`fc1::` is 0fc1::, a public address, and
+  // link-local is fe80::/10, which runs to febf).
+  const first = lower.startsWith("::") ? "0" : lower.split(":")[0];
+  if (!/^[0-9a-f]{1,4}$/.test(first)) return true; // not an address we can read
+  const n = parseInt(first, 16);
   return (
-    lower === "::" ||
-    lower === "::1" || // loopback
-    lower.startsWith("fe80") || // link-local
-    lower.startsWith("fc") || lower.startsWith("fd") || // unique local
-    lower.startsWith("ff") // multicast
+    (n & 0xfe00) === 0xfc00 || // unique local, fc00::/7
+    (n & 0xffc0) === 0xfe80 || // link-local, fe80::/10
+    (n & 0xffc0) === 0xfec0 || // the old site-local, fec0::/10
+    (n & 0xff00) === 0xff00 // multicast, ff00::/8
   );
 }
 
@@ -150,17 +163,31 @@ export async function safePost(
   const target = parseTarget(baseUrl);
   if (target === null) return { ok: false, reason: "blocked" };
 
+  // One deadline for the whole exchange, the name lookup included: a resolver
+  // that never answers would otherwise hold this worker until the runtime
+  // retired it.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // A socket cannot be aborted like a fetch. The deadline wins the race
+  // whatever the socket is doing, and closing it ends any read still waiting.
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("timed out")), options.timeoutMs ?? TIMEOUT_MS);
+  });
+  // Nobody may be waiting on it when an early return leaves it to fire.
+  deadline.catch(() => {});
+
   const resolve = options.resolve ?? defaultResolve;
   let addresses: string[];
   try {
-    addresses = await resolve(target.hostname);
+    addresses = await Promise.race([resolve(target.hostname), deadline]);
   } catch {
+    clearTimeout(timer);
     return { ok: false, reason: "unreachable" };
   }
 
   // Every answer, not just the first: a host that resolves to one public and
   // one private address is a rebind waiting to happen.
   if (addresses.length === 0 || addresses.some(isBlockedAddress)) {
+    clearTimeout(timer);
     return { ok: false, reason: "blocked" };
   }
 
@@ -177,12 +204,6 @@ export async function safePost(
   );
 
   let conn: Conn | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  // A socket cannot be aborted like a fetch. The deadline wins the race
-  // whatever the socket is doing, and closing it ends any read still waiting.
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timed out")), options.timeoutMs ?? TIMEOUT_MS);
-  });
   const exchange = async () => {
     conn = await (options.connect ?? defaultConnect)(addresses[0], port, target.hostname);
     const writer = conn.writable.getWriter();
@@ -270,6 +291,10 @@ export async function readResponse(
         return finish(status, chunked ? dechunk(raw).body : raw);
       }
       buffer = concat([buffer, value]);
+      // However the body is framed. A chunked body whose size lines never
+      // end, or are not hex, decodes to nothing and would otherwise be read
+      // until the deadline; a real answer is far inside this.
+      if (buffer.length > MAX_READ_BYTES) throw new Error("reply too long");
     }
   } finally {
     reader.cancel().catch(() => {});
