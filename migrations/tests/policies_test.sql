@@ -278,7 +278,9 @@ BEGIN
     PERFORM send_dm('cccc0000-0000-4000-8000-000000000003', 'x', 'n', 's', 1);
     RAISE EXCEPTION 'FAIL: a message was accepted for an account with no profile';
   EXCEPTION WHEN raise_exception THEN
-    IF SQLERRM <> 'recipient_has_no_profile' THEN RAISE; END IF;
+    -- The same answer as a blocked or never-friended account (022), so the
+    -- difference cannot say who exists.
+    IF SQLERRM <> 'not_friends' THEN RAISE; END IF;
   END;
 
   BEGIN
@@ -3668,6 +3670,58 @@ BEGIN
     RAISE EXCEPTION 'FAIL: a session can read held handles';
   END IF;
   RAISE NOTICE 'ok  a dropped handle is held 30 days, for its account after a rename and for nobody after a deletion';
+END $$;
+
+-- ---------- 022: the Nov 27 review ----------
+INSERT INTO auth.users (id) VALUES
+  ('cccc0000-0000-4000-8000-000000002201'),
+  ('cccc0000-0000-4000-8000-000000002202');
+INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+  ('cccc0000-0000-4000-8000-000000002201', 'peer_ida', 'c', 's'),
+  ('cccc0000-0000-4000-8000-000000002202', 'peer_jon', 'c', 's');
+
+DO $$
+DECLARE
+  v_ida CONSTANT UUID := 'cccc0000-0000-4000-8000-000000002201';
+  v_jon CONSTANT UUID := 'cccc0000-0000-4000-8000-000000002202';
+BEGIN
+  -- What Ida kept about Jon goes the night after Jon's account does; what
+  -- she keeps about a live account stays.
+  INSERT INTO read_state (user_id, scope, scope_id, last_read_id) VALUES
+    (v_ida, 'dm', v_jon, 5),
+    (v_ida, 'dm', 'cccc0000-0000-4000-8000-000000002002', 5);
+  INSERT INTO notification_prefs (user_id, scope, scope_id, level) VALUES
+    (v_ida, 'dm', v_jon, 'none');
+  DELETE FROM auth.users WHERE id = v_jon;
+  PERFORM prune_deleted_peers();
+  IF EXISTS (SELECT 1 FROM read_state WHERE scope_id = v_jon)
+     OR EXISTS (SELECT 1 FROM notification_prefs WHERE scope_id = v_jon) THEN
+    RAISE EXCEPTION 'FAIL: a deleted account''s id stayed in someone''s read cursor or notification level';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM read_state
+                  WHERE user_id = v_ida AND scope_id = 'cccc0000-0000-4000-8000-000000002002') THEN
+    RAISE EXCEPTION 'FAIL: the prune removed a cursor for a live account';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'central-deleted-peer-prune') THEN
+    RAISE EXCEPTION 'FAIL: the deleted-peer prune is not scheduled';
+  END IF;
+
+  -- The hold is checked after the write too. With the check before it
+  -- switched off, which is what a claim that passed it and then waited on the
+  -- unique index amounts to, the one after still refuses.
+  INSERT INTO released_handles (handle, previous_owner, released_at)
+       VALUES ('peer_free', 'cccc0000-0000-4000-8000-000000002002', now());
+  ALTER TABLE users DISABLE TRIGGER users_refuse_held_handle;
+  BEGIN
+    UPDATE users SET handle = 'peer_free' WHERE id = v_ida;
+    RAISE EXCEPTION 'FAIL: a held handle was taken past the check before the write';
+  EXCEPTION WHEN unique_violation THEN
+    IF SQLERRM <> 'handle_held' THEN RAISE; END IF;
+  END;
+  -- Its own previous owner may still take it back.
+  UPDATE users SET handle = 'peer_free' WHERE id = 'cccc0000-0000-4000-8000-000000002002';
+  ALTER TABLE users ENABLE TRIGGER users_refuse_held_handle;
+  RAISE NOTICE 'ok  a deleted account leaves no id in others'' cursors, and a hold is checked after the write';
 END $$;
 
 ROLLBACK;
