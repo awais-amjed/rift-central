@@ -2569,6 +2569,12 @@ BEGIN
     IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
   END;
   BEGIN
+    PERFORM moderation_delete_bug_report(v_id);
+    RAISE EXCEPTION 'FAIL: a member deleted a bug report';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  BEGIN
     PERFORM submit_bug_report('   ', '1.4.0', 'linux');
     RAISE EXCEPTION 'FAIL: an empty report was accepted';
   EXCEPTION WHEN check_violation THEN NULL;
@@ -2672,7 +2678,43 @@ BEGIN
        WHERE r ->> 'id' = v_id) IS NOT NULL THEN
     RAISE EXCEPTION 'FAIL: a report could not be opened again';
   END IF;
-  RAISE NOTICE 'ok  a moderator reads every report and its files, and resolves them';
+
+  -- Deleting one takes it off the list at once; deleting it again says so.
+  PERFORM moderation_delete_bug_report(
+    (SELECT (r ->> 'id')::uuid FROM jsonb_array_elements(moderation_bug_reports()) r
+      WHERE r ->> 'description' = 'again 2'));
+  IF jsonb_array_length(moderation_bug_reports()) <> 9
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(moderation_bug_reports()) r
+                 WHERE r ->> 'description' = 'again 2') THEN
+    RAISE EXCEPTION 'FAIL: a deleted bug report is still listed';
+  END IF;
+  BEGIN
+    PERFORM moderation_delete_bug_report('cccc0000-0000-4000-8000-00000000ffff');
+    RAISE EXCEPTION 'FAIL: deleting a report that is not there passed silently';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'bug_report_not_found' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  a moderator reads every report and its files, resolves them and deletes them';
+END $$;
+
+-- A deleted report still counts against its sender's day, and the table
+-- that remembers it is nobody's to read.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000000002","role":"authenticated"}', true); END $$;
+DO $$
+BEGIN
+  BEGIN
+    PERFORM submit_bug_report('after a delete', '1.4.0', 'linux');
+    RAISE EXCEPTION 'FAIL: deleting a report gave its sender a slot back';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'bug_report_limit_reached' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM 1 FROM bug_report_deletions;
+    RAISE EXCEPTION 'FAIL: a member read bug_report_deletions';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'ok  a deleted bug report still counts against the sender''s day';
 END $$;
 
 -- Retention: a report past 90 days goes, and its files are then the sweep's.

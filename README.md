@@ -14,7 +14,7 @@ you join. Central is for the things that can't live on somebody else's server:
 | Friends, blocks, direct messages | Between people who share no server yet |
 | The public server and bot directories | Opt-in listings, so a server or a bot can be found |
 | Directory moderation | Reports, and moderators who can hide a listing |
-| Bug reports | What someone sends from the app's Report a bug, with its logs; read by moderators on the admin site, and in a private channel if a webhook is set (without the logs), deleted after 90 days |
+| Bug reports | What someone sends from the app's Report a bug, with its logs; read by moderators on the admin site, and in a private channel if a webhook is set (without the logs), deleted after 90 days or sooner by a moderator |
 | The push relay | A phone's push token belongs to the app's Firebase project, so a self-hosted server can't wake its own members' phones and has to ask |
 
 Relaying a push teaches central a device token and a moment — not the sender,
