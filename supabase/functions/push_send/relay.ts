@@ -46,6 +46,15 @@ const MAX_TOKENS = 1000;
  */
 export const MAX_BODY_BYTES = 512 * 1024;
 
+/**
+ * How long one outbound call may take: Google's token exchange, a ring, a
+ * database call. A peer that never answers would otherwise hold the request
+ * until the host retires the worker (a minute on Supabase), and every ring
+ * behind it with it.
+ */
+const CALL_TIMEOUT_MS = 10_000;
+const deadline = () => AbortSignal.timeout(CALL_TIMEOUT_MS);
+
 function b64url(bytes: Uint8Array | string): string {
   const raw = typeof bytes === "string" ? bytes : String.fromCharCode(...bytes);
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -102,6 +111,7 @@ export function createRelay(config: RelayConfig) {
 
     const res = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
+      signal: deadline(),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -127,8 +137,27 @@ export function createRelay(config: RelayConfig) {
    * conversation or who.
    */
   async function ring(token: string, bearer: string, kind: RingKind): Promise<boolean> {
-    const res = await fetch(fcmUrl, {
+    let res: Response;
+    try {
+      res = await send(token, bearer, kind);
+    } catch {
+      // Timed out or never connected: not the token's fault either, and one
+      // slow ring must not fail the others beside it.
+      return true;
+    }
+    if (res.ok) return true;
+
+    const body = await res.text().catch(() => "");
+    // Uninstalled, or the token was replaced. Anything else — a network blip, a
+    // quota — is not the token's fault and must not delete it.
+    return !(res.status === 404 || body.includes("UNREGISTERED") ||
+      body.includes("INVALID_ARGUMENT"));
+  }
+
+  function send(token: string, bearer: string, kind: RingKind): Promise<Response> {
+    return fetch(fcmUrl, {
       method: "POST",
+      signal: deadline(),
       headers: {
         Authorization: `Bearer ${bearer}`,
         "Content-Type": "application/json",
@@ -145,20 +174,13 @@ export function createRelay(config: RelayConfig) {
         },
       }),
     });
-    if (res.ok) return true;
-
-    const body = await res.text();
-    // Uninstalled, or the token was replaced. Anything else — a network blip, a
-    // quota — is not the token's fault and must not delete it.
-    return !(res.status === 404 || body.includes("UNREGISTERED") ||
-      body.includes("INVALID_ARGUMENT"));
   }
 
   /** Every device registered to one account on this deployment. */
   async function tokensFor(recipient: string): Promise<string[]> {
     const res = await fetch(
       `${rest}/device_tokens?select=token&user_id=eq.${encodeURIComponent(recipient)}`,
-      { headers: dbHeaders },
+      { headers: dbHeaders, signal: deadline() },
     );
     if (!res.ok) throw new Error(`db: ${await res.text()}`);
     return (await res.json()).map((row: { token: string }) => row.token);
@@ -169,6 +191,7 @@ export function createRelay(config: RelayConfig) {
   async function claim(relayId: string, secret: string, count: number): Promise<boolean> {
     const res = await fetch(`${rest}/rpc/claim_relay_push`, {
       method: "POST",
+      signal: deadline(),
       headers: dbHeaders,
       body: JSON.stringify({ p_relay_id: relayId, p_secret: secret, p_count: count }),
     });
@@ -184,6 +207,7 @@ export function createRelay(config: RelayConfig) {
       fetch(`${rest}/device_tokens?token=eq.${encodeURIComponent(token)}`, {
         method: "DELETE",
         headers: dbHeaders,
+        signal: deadline(),
       })
     ));
   }
