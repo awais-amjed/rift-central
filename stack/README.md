@@ -108,6 +108,11 @@ ignores. `up.sh` does not watch the folder; after changing a site,
 - **Seeds Realtime's tenant** only when the database has none — a fresh stack,
   or a new machine restoring from backup — and never again after, as
   rift-self-host explains.
+- **Raises Realtime's limits** off the seed's 200 connections and 100 events
+  a second, to the numbers rift-self-host's console sets (10,000 connections,
+  200,000 events a second), and restarts Realtime when that changed the row.
+  Past a limit Realtime drops events or refuses a socket silently, and a
+  client over it just stops hearing DMs.
 
 ## Checking it
 

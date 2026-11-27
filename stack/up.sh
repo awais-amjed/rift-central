@@ -34,6 +34,28 @@ if [[ $tenants == 0 ]]; then
 else
   docker compose up -d --wait
 fi
+# The tenant's limits, off the seed's (200 connections, 100 events a second).
+# Realtime counts each delivery as an event, and past a limit it drops events
+# or refuses a socket without a word to anyone, so a client over it just stops
+# hearing DMs. These are the numbers rift-self-host's console sets, measured
+# there (console/src/setup/realtime.ts); RLIMIT_NOFILE in docker-compose.yml
+# goes with the connection count. Realtime caches the row, so it is restarted
+# when this changes it.
+raised=$(docker exec -e PGOPTIONS='-c client_min_messages=warning' central-db \
+  psql -U supabase_admin -d postgres -qtA -v ON_ERROR_STOP=1 -c "
+  UPDATE _realtime.tenants SET
+    max_events_per_second = 200000, max_bytes_per_second = 100000000,
+    max_presence_events_per_second = 50000, max_concurrent_users = 10000,
+    max_joins_per_second = 5000, max_channels_per_client = 1000
+   WHERE (max_events_per_second, max_bytes_per_second, max_presence_events_per_second,
+          max_concurrent_users, max_joins_per_second, max_channels_per_client)
+         IS DISTINCT FROM (200000, 100000000, 50000, 10000, 5000, 1000)
+  RETURNING external_id")
+if [[ -n $raised ]]; then
+  docker compose restart realtime >/dev/null
+  docker compose up -d --wait >/dev/null
+  echo "raised Realtime's limits"
+fi
 # A profile that is off does not stop what it started; back on a local stack,
 # Caddy would keep holding 80 and 443.
 if ! grep -q "^COMPOSE_PROFILES='tls'" .env; then
