@@ -3724,4 +3724,158 @@ BEGIN
   RAISE NOTICE 'ok  a deleted account leaves no id in others'' cursors, and a hold is checked after the write';
 END $$;
 
+-- ============================================================
+-- The Nov 27 review's speed fixes (023)
+-- ============================================================
+-- The two policies now work out a set once per statement. What each lets an
+-- account see must be exactly what the per-row tests answered, for every
+-- account and every row this suite has made.
+RESET ROLE;
+CREATE TEMP TABLE t023_users ON COMMIT DROP AS SELECT id FROM users;
+CREATE TEMP TABLE t023_files ON COMMIT DROP AS
+  SELECT name FROM storage.objects WHERE bucket_id = 'central-dm-attachments';
+INSERT INTO t023_files VALUES ('cccc0000-0000-4000-8000-000000000001'),
+                              ('cccc0000-0000-4000-8000-000000000002');
+INSERT INTO storage.objects (bucket_id, name, owner)
+  SELECT 'central-dm-attachments', name, NULL FROM t023_files
+   WHERE strpos(name, '/') = 0 AND name ~ '^cccc';
+GRANT SELECT ON t023_users, t023_files TO authenticated;
+
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE
+  v_who  UUID;
+  v_seen UUID[];
+  v_want UUID[];
+  v_got  TEXT[];
+  v_due  TEXT[];
+BEGIN
+  FOR v_who IN SELECT id FROM t023_users LOOP
+    PERFORM set_config('request.jwt.claims',
+      '{"sub":"' || v_who || '","role":"authenticated"}', true);
+    SELECT COALESCE(array_agg(id ORDER BY id), '{}') INTO v_seen FROM users;
+    SELECT COALESCE(array_agg(id ORDER BY id), '{}') INTO v_want
+      FROM t023_users WHERE id = auth.uid() OR knows_user(id);
+    IF v_seen IS DISTINCT FROM v_want THEN
+      RAISE EXCEPTION 'FAIL: % sees % in users, knows_user says %', v_who, v_seen, v_want;
+    END IF;
+    SELECT COALESCE(array_agg(name ORDER BY name), '{}') INTO v_got
+      FROM storage.objects WHERE bucket_id = 'central-dm-attachments';
+    SELECT COALESCE(array_agg(name ORDER BY name), '{}') INTO v_due
+      FROM t023_files WHERE dm_attachment_readable(name);
+    IF v_got IS DISTINCT FROM v_due THEN
+      RAISE EXCEPTION 'FAIL: % lists % in the DM bucket, the per-file test says %', v_who, v_got, v_due;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'ok  users and DM files: the set-based policies see what the per-row tests did';
+END $$;
+
+-- A repeated read cursor writes nothing, and still answers the cursor.
+RESET ROLE;
+INSERT INTO auth.users (id) VALUES ('cccc0000-0000-4000-8000-000000002301');
+INSERT INTO users (id, handle, chat_public_key, signing_public_key) VALUES
+  ('cccc0000-0000-4000-8000-000000002301', 'peer_kim', 'c', 's');
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE
+  v_peer CONSTANT UUID := 'cccc0000-0000-4000-8000-000000002002';
+  v_row  TID;
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"cccc0000-0000-4000-8000-000000002301","role":"authenticated"}', true);
+  IF mark_read('dm', v_peer, 7) <> 7 THEN
+    RAISE EXCEPTION 'FAIL: a first read cursor did not answer itself';
+  END IF;
+  SELECT ctid INTO v_row FROM read_state WHERE user_id = auth.uid() AND scope_id = v_peer;
+  IF mark_read('dm', v_peer, 7) <> 7 OR mark_read('dm', v_peer, 3) <> 7 THEN
+    RAISE EXCEPTION 'FAIL: a cursor that did not move answered something else';
+  END IF;
+  IF (SELECT ctid FROM read_state WHERE user_id = auth.uid() AND scope_id = v_peer) <> v_row THEN
+    RAISE EXCEPTION 'FAIL: a cursor that did not move was written again';
+  END IF;
+  IF mark_read('dm', v_peer, 9) <> 9 THEN
+    RAISE EXCEPTION 'FAIL: a cursor stopped moving forwards';
+  END IF;
+  RAISE NOTICE 'ok  mark_read writes only when the cursor moves';
+END $$;
+
+-- The accounts list a page at a time is the whole list, in its order.
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-000000002301","role":"authenticated"}', true); END $$;
+DO $$
+BEGIN
+  BEGIN
+    PERFORM moderation_accounts_page();
+    RAISE EXCEPTION 'FAIL: a member read a page of accounts';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM moderation_account_stats();
+    RAISE EXCEPTION 'FAIL: a member read the account totals';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'not_a_moderator' THEN RAISE; END IF;
+  END;
+  RAISE NOTICE 'ok  only a moderator reads account pages and totals';
+END $$;
+
+DO $$ BEGIN PERFORM set_config('request.jwt.claims',
+  '{"sub":"cccc0000-0000-4000-8000-0000000000e1","role":"authenticated","aal":"aal2"}', true); END $$;
+DO $$
+DECLARE
+  v_all   JSONB := moderation_accounts();
+  v_walk  JSONB := '[]';
+  v_page  JSONB;
+  v_last  JSONB;
+  v_stats JSONB := moderation_account_stats();
+  v_hit   JSONB;
+BEGIN
+  v_page := moderation_accounts_page(p_limit => 3);
+  WHILE jsonb_array_length(v_page) > 0 LOOP
+    v_walk := v_walk || v_page;
+    v_last := v_page -> (jsonb_array_length(v_page) - 1);
+    v_page := moderation_accounts_page((v_last ->> 'created_at')::timestamptz,
+                                       (v_last ->> 'id')::uuid, NULL, 3);
+  END LOOP;
+  IF (SELECT array_agg(r ->> 'id' ORDER BY r ->> 'id') FROM jsonb_array_elements(v_walk) r)
+     IS DISTINCT FROM
+     (SELECT array_agg(r ->> 'id' ORDER BY r ->> 'id') FROM jsonb_array_elements(v_all) r) THEN
+    RAISE EXCEPTION 'FAIL: walking the pages missed or repeated accounts (% of %)',
+      jsonb_array_length(v_walk), jsonb_array_length(v_all);
+  END IF;
+  IF (v_stats ->> 'accounts')::int <> jsonb_array_length(v_all) THEN
+    RAISE EXCEPTION 'FAIL: the totals count % accounts, the list %',
+      v_stats ->> 'accounts', jsonb_array_length(v_all);
+  END IF;
+  SELECT r INTO v_hit FROM jsonb_array_elements(v_all) r
+   WHERE r ->> 'id' = 'cccc0000-0000-4000-8000-000000000001';
+  IF moderation_accounts_page(p_search => '  ALICE@exam ') <> jsonb_build_array(v_hit)
+     OR moderation_accounts_page(p_search => 'ice_tes') <> jsonb_build_array(v_hit) THEN
+    RAISE EXCEPTION 'FAIL: a search did not find alice by her email or handle alone';
+  END IF;
+  IF (v_stats ->> 'active_today')::int < 1 THEN
+    RAISE EXCEPTION 'FAIL: alice''s refresh an hour ago is not counted active today';
+  END IF;
+  RAISE NOTICE 'ok  account pages walk the whole list, and search finds by email or handle';
+END $$;
+
+-- Every foreign key in public has an index that leads with its column, so
+-- deleting the row it names is not a scan of its table.
+RESET ROLE;
+DO $$
+DECLARE v_missing TEXT;
+BEGIN
+  SELECT string_agg(c.conrelid::regclass || '.' || a.attname, ', ') INTO v_missing
+    FROM pg_constraint c
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+   WHERE c.contype = 'f'
+     AND c.connamespace = 'public'::regnamespace
+     AND NOT EXISTS (SELECT 1 FROM pg_index i
+                      WHERE i.indrelid = c.conrelid AND i.indkey[0] = c.conkey[1]);
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: foreign keys with no index leading with them: %', v_missing;
+  END IF;
+  RAISE NOTICE 'ok  every foreign key has an index';
+END $$;
+
 ROLLBACK;
